@@ -92,8 +92,12 @@ function monthTeachers(st, ym) {
 }
 const inTeacherMonth = (st, tid, ym) => !tid || monthTeachers(st, ym).includes(tid);
 const dailyPagesOf = (st) => Number(st.dailyPages) || Number(db.settings.dailyPages) || 1;
-function teacherOptions(selected) {
-  return `<option value="">—</option>` + teachers().map((t) => `<option value="${t.id}" ${t.id === selected ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+// شيخ السرد يستعان به أيام السرد الشهري، وليس له طلاب حلقة
+const halaqaTeachers = () => teachers().filter((t) => t.kind !== "sard");
+const sardTeachers = () => teachers().filter((t) => t.kind === "sard");
+const isSardTeacher = () => !!(auth && auth.role === "teacher" && (getTeacher(auth.teacherId) || {}).kind === "sard");
+function teacherOptions(selected, list = halaqaTeachers()) {
+  return `<option value="">—</option>` + list.map((t) => `<option value="${t.id}" ${t.id === selected ? "selected" : ""}>${esc(t.name)}</option>`).join("");
 }
 
 /* ---------- السجلات ---------- */
@@ -560,13 +564,15 @@ function dailyForm(studentId, rec = null, preset = {}) {
 function sardForm(studentId, rec = null) {
   const st = getStudent(studentId);
   if (!st) return;
-  const r = rec || { date: todayStr(), teacherId: st.teacherId || "", mistakes: 0 };
+  const next = rec ? null : sardNext(st, currentMonth());
+  const r = rec || { date: todayStr(), mistakes: 0, fromPage: next && !next.done ? next.from : "",
+    teacherId: (auth && auth.teacherId) || (sardTeachers()[0] || {}).id || st.teacherId || "" };
   const form = openDialog(`
     <h2>${rec ? "تعديل السرد" : "تسجيل سرد"} — ${esc(st.name)}</h2>
     <p class="small muted">السرد الشهري: يقرأ الطالب محفوظه في مجلس أو أكثر. سجّل كل مجلس، ويُجمع عدد الأوجه للشهر تلقائياً.</p>
     <div class="grid2">
       <label><span>التاريخ</span><input name="date" type="date" required value="${esc(r.date)}"></label>
-      <label ${isStudent() ? "hidden" : ""}><span>المعلم</span><select name="teacherId">${teacherOptions(r.teacherId)}</select></label>
+      <label ${isStudent() ? "hidden" : ""}><span>الشيخ</span><select name="teacherId">${teacherOptions(r.teacherId, teachers())}</select></label>
       <label><span>من صفحة</span><input name="fromPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.fromPage || ""}"></label>
       <label><span>إلى صفحة</span><input name="toPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.toPage || ""}"></label>
       <label><span>عدد الأوجه</span><input name="pages" type="number" min="0" inputmode="numeric" value="${r.pages || pagesOf(r) || ""}"></label>
@@ -673,7 +679,7 @@ function programHomeSection() {
       </div></div>` : ""}
     ${approvalsHtml(tid)}
     <h2>${esc(programName())}</h2>
-    ${teachers().length > 1 ? `<div class="tabs" style="margin-top:0">${[["", "الكل"], ...teachers().map((t) => [t.id, t.name])].map(([id, n]) =>
+    ${halaqaTeachers().length > 1 ? `<div class="tabs" style="margin-top:0">${[["", "الكل"], ...halaqaTeachers().map((t) => [t.id, t.name])].map(([id, n]) =>
       `<button data-home-teacher="${id}" class="${tid === id ? "active" : ""}">${esc(n)}</button>`).join("")}</div>` : ""}
     <div class="card">
       <div class="row between"><b>هذا الأسبوع</b>
@@ -690,6 +696,7 @@ function programHomeSection() {
         <span class="grow"><b>${esc(st.name)}</b><br><span class="small muted">${o.map((r) => `${DAYS[dowOf(r.date)]} ${Number(r.date.slice(8))} (${r.status === "absent" ? "غياب" : "خطأ"})`).join("، ")}</span></span>
         <button class="btn sm primary" data-daily-new="${st.id}" data-date="${today}" data-kind="makeup">↩️ تسجيل التعويض</button></li>`).join("")}</ul></div>` : ""}
     <div class="row" style="margin-top:10px">
+      <a class="btn" href="#/sard">📚 قائمة السرد</a>
       <a class="btn" href="#/stats">📊 الإحصائيات والتقرير الشهري</a>
       <a class="btn" href="#/reminders">🔔 التذكير</a>
     </div>`;
@@ -794,7 +801,7 @@ function pageStats(ymArg, tidArg) {
   });
   const maxW = Math.max(1, ...weeks.map((w) => w.n));
 
-  const byTeacher = teachers().map((t) => {
+  const byTeacher = halaqaTeachers().map((t) => {
     const rs = rows.filter((x) => monthTeachers(x.st, ym).includes(t.id));
     const req = rs.reduce((a, x) => a + x.m.required, 0), ach = rs.reduce((a, x) => a + x.m.achieved, 0);
     return { t, n: rs.length, rate: req ? ach / req : null, pages: rs.reduce((a, x) => a + x.m.pages, 0), sard: rs.reduce((a, x) => a + x.m.sardPages, 0) };
@@ -807,7 +814,7 @@ function pageStats(ymArg, tidArg) {
       <span style="text-align:center"><b>${fmtMonth(ym)}</b><br><span class="small muted">${fmtDate(range.first)} – ${fmtDate(range.last)}</span></span>
       <a class="btn sm" href="${link(shiftMonth(ym, 1), tid)}" aria-label="الشهر التالي">←</a>
     </div>
-    ${teachers().length > 1 ? `<div class="tabs">${[["", "كل الحلقات"], ...teachers().map((t) => [t.id, t.name])].map(([id, n]) =>
+    ${halaqaTeachers().length > 1 ? `<div class="tabs">${[["", "كل الحلقات"], ...halaqaTeachers().map((t) => [t.id, t.name])].map(([id, n]) =>
       `<a class="tabbtn ${tid === id ? "active" : ""}" href="${link(ym, id)}">${esc(n)}</a>`).join("")}</div>` : ""}
     <div class="stats">
       <div class="stat"><b>${sts.length}</b><span>طالب</span></div>
@@ -862,6 +869,56 @@ function pageStats(ymArg, tidArg) {
     </div>`).join("") : `<div class="card empty">لا يوجد طلاب</div>`}`;
 }
 
+/* ---------- قائمة السرد (لشيخ السرد) ---------- */
+// نطاق المحفوظ، وما سُرد هذا الشهر، ومن أين يبدأ المجلس القادم
+function sardNext(st, ym) {
+  const set = memorizedSet(st);
+  if (!set.size) return { lo: 0, hi: 0, memorized: 0, total: 0, from: 0, done: false };
+  const lo = Math.min(...set), hi = Math.max(...set);
+  const { first, last } = monthRange(ym);
+  const recs = db.sard.filter((r) => r.studentId === st.id && r.date >= first && r.date <= last).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
+  const total = recs.reduce((a, r) => a + sardPagesOf(r), 0);
+  const lastRec = [...recs].reverse().find((r) => r.toPage);
+  const from = lastRec ? Math.max(lastRec.fromPage, lastRec.toPage) + 1 : lo;
+  return { lo, hi, memorized: set.size, total, sittings: recs.length, from, done: total >= set.size || from > hi, lastDate: recs.length ? recs[recs.length - 1].date : "" };
+}
+function pageSardList(ymArg) {
+  const ym = /^\d{4}-\d{2}$/.test(ymArg || "") ? ymArg : currentMonth();
+  const rows = db.students.map((st) => ({ st, n: sardNext(st, ym) })).filter((x) => x.n.memorized)
+    .sort((a, b) => a.n.done - b.n.done || a.n.total / a.n.memorized - b.n.total / b.n.memorized || a.st.name.localeCompare(b.st.name, "ar"));
+  const done = rows.filter((x) => x.n.done).length;
+  const today = todayStr();
+  const todayCount = db.sard.filter((r) => r.date === today).length;
+  return `
+    <h1>قائمة السرد — ${fmtMonth(ym)}</h1>
+    <div class="row between card monthnav">
+      <a class="btn sm" href="#/sard/${shiftMonth(ym, -1)}" aria-label="الشهر السابق">→</a>
+      <span style="text-align:center"><b>أتمّ السرد ${done} من ${rows.length}</b><br><span class="small muted">مجالس اليوم: ${todayCount}</span></span>
+      <a class="btn sm" href="#/sard/${shiftMonth(ym, 1)}" aria-label="الشهر التالي">←</a>
+    </div>
+    ${todayCount ? `<button class="btn whatsapp block" data-sard-summary="${today}" style="margin-bottom:12px">📤 ملخص سرد اليوم للمشرف</button>` : ""}
+    ${rows.length ? rows.map(({ st, n }) => `<div class="card">
+      <div class="row between"><b>${esc(st.name)}</b>
+        ${n.done ? `<span class="badge ok">أتمّ سرد الشهر ✓</span>` : `<span class="badge ${n.total ? "warn" : ""}">${wajhAr(n.total)} من ${n.memorized}</span>`}</div>
+      <div class="small muted">محفوظه: من صفحة ${n.lo} إلى ${n.hi} (${wajhAr(n.memorized)})${teacherOf(st) ? ` · ${esc(teacherOf(st).name)}` : ""}</div>
+      ${progressBar(n.total / n.memorized, `سرد ${pct(n.total / n.memorized)}`)}
+      <div class="row between" style="margin-top:6px">
+        <span class="small">${n.done ? "" : n.sittings ? `يبدأ المجلس القادم من صفحة <b>${n.from}</b> (سورة ${surahName(PAGE_SURAH[n.from - 1])})` : `يبدأ من صفحة <b>${n.from}</b>`}</span>
+        ${ym === currentMonth() ? `<button class="btn sm primary" data-sard-new="${st.id}">+ تسجيل سرد</button>` : ""}
+      </div>
+    </div>`).join("") : `<div class="card empty">لا يوجد طلاب لهم محفوظ بعد</div>`}`;
+}
+function buildSardDaySummary(date) {
+  const recs = db.sard.filter((r) => r.date === date && getStudent(r.studentId));
+  const ym = monthOf(date);
+  return ["السلام عليكم ورحمة الله وبركاته", `📚 ملخص السرد — ${fmtDate(date)}`, `عدد المجالس: ${recs.length}`, "",
+    ...recs.map((r, i) => {
+      const st = getStudent(r.studentId), n = sardNext(st, ym);
+      return `${i + 1}. ${st.name}: ${pagesOf(r) ? `${pageRangeText(r)} — ` : ""}${wajhAr(sardPagesOf(r))}${r.mistakes ? ` · ${r.mistakes} خطأ` : " · بلا أخطاء"}` +
+        `\n   مجموع سرده هذا الشهر ${n.total} من ${n.memorized}${n.done ? " ✅ أتمّ" : ""}`;
+    })].join("\n");
+}
+
 /* ---------- توزيع الطلاب على المعلمين ---------- */
 function pageAssign() {
   const sts = [...db.students].sort((a, b) => (a.teacherId || "").localeCompare(b.teacherId || "") || a.name.localeCompare(b.name, "ar"));
@@ -870,7 +927,7 @@ function pageAssign() {
   return `
     <h1>توزيع الطلاب على المعلمين</h1>
     <p class="small muted">غيّر معلم من تريد ثم اضغط «حفظ». تبقى تقارير الأشهر السابقة باسم المعلم الذي كان معه.</p>
-    ${teachers().length ? `<div class="stats">${teachers().map((t) => `<div class="stat"><b>${count(t.id)}</b><span>${esc(t.name)}</span></div>`).join("")}</div>` : `<div class="card empty">أضف المعلمين أولاً من الإعدادات</div>`}
+    ${halaqaTeachers().length ? `<div class="stats">${halaqaTeachers().map((t) => `<div class="stat"><b>${count(t.id)}</b><span>${esc(t.name)}</span></div>`).join("")}</div>` : `<div class="card empty">أضف المعلمين أولاً من الإعدادات</div>`}
     <form id="assign-form" class="card">
       <p class="field-label" style="margin-top:0">يبدأ التغيير</p>
       ${chips("from", [[monthRange(cur).first, `من بداية شهر ${fmtMonth(cur)}`], [todayStr(), "من اليوم"]], monthRange(cur).first)}
@@ -947,6 +1004,10 @@ function programClick(t) {
   }
   if (d.exam) { examDialog(d.exam, d.ids ? d.ids.split(",").filter(Boolean) : []); return true; }
   if ("print" in d) { window.print(); return true; }
+  if (d.sardSummary) {
+    multiSendDialog({ title: "ملخص سرد اليوم", text: buildSardDaySummary(d.sardSummary), recipients: staffRecipients() });
+    return true;
+  }
   if ("homeTeacher" in d) { programHomeSection.tid = d.homeTeacher; render(); return true; }
   return false;
 }
@@ -968,10 +1029,13 @@ function programSettingsHtml() {
     <label><span>عدد الأخطاء المسموح ليُعدّ الورد منجزاً</span><select name="passMistakes">${[0, 1, 2, 3].map((n) =>
       `<option value="${n}" ${n === (Number(s.passMistakes) || 0) ? "selected" : ""}>${n === 0 ? "لا شيء — أي خطأ يوجب التعويض" : n}</option>`).join("")}</select></label>
     <label><span>الدرجة الكاملة للاختبار الشهري</span><input name="examMax" type="number" min="1" inputmode="numeric" value="${examMax()}"></label>
-    <p class="field-label">المعلمون (يُرسل لكل معلم تقرير طلابه)</p>
+    <p class="field-label">المعلمون وشيخ السرد</p>
     ${list.map((t) => `<div class="grid2"><input type="hidden" name="tId" value="${esc(t.id || "")}">
       <input name="tName" placeholder="اسم المعلم" aria-label="اسم المعلم" value="${esc(t.name || "")}">
       <input name="tPhone" type="tel" inputmode="tel" placeholder="جوال المعلم" aria-label="جوال المعلم" value="${esc(t.phone || "")}">
+      <select name="tKind" aria-label="عمل المعلم" style="grid-column:1/-1;margin-bottom:8px">
+        <option value="halaqa" ${t.kind !== "sard" ? "selected" : ""}>معلم حلقة (التسميع اليومي)</option>
+        <option value="sard" ${t.kind === "sard" ? "selected" : ""}>شيخ السرد (أيام السرد الشهري)</option></select>
       ${isAdmin() && t.code ? `<div style="grid-column:1/-1;margin-bottom:8px"><button type="button" class="btn sm whatsapp" data-send-teacher-code="${t.id}">📤 إرسال رابط الدخول لـ ${esc(t.name)}</button></div>` : ""}</div>`).join("")}
     ${isAdmin() ? `<p class="small muted">اكتب اسم المعلم وجواله ثم «حفظ الإعدادات»، فيظهر زر إرسال رابط دخوله.</p>` : ""}
     <p class="small muted">لإضافة معلم آخر احفظ ثم ستظهر خانة جديدة. ولحذف معلم امسح اسمه.</p>
@@ -982,12 +1046,12 @@ function programSettingsHtml() {
     <hr class="sep">`;
 }
 function readProgramSettings(fd) {
-  const ids = fd.getAll("tId"), names = fd.getAll("tName"), phones = fd.getAll("tPhone");
+  const ids = fd.getAll("tId"), names = fd.getAll("tName"), phones = fd.getAll("tPhone"), kinds = fd.getAll("tKind");
   // رمز دخول المعلم يُنشأ تلقائياً (المشرف وحده يملك رموز المعلمين)
   const list = names.map((n, i) => {
     const id = ids[i] || uid();
     const code = (getTeacher(id) || {}).code || (isAdmin() && n.trim() ? newCode() : "");
-    return { id, name: n.trim(), phone: phones[i].trim(), code };
+    return { id, name: n.trim(), phone: phones[i].trim(), code, kind: kinds[i] === "sard" ? "sard" : "halaqa" };
   }).filter((t) => t.name);
   const days = fd.getAll("programDays").map(Number);
   return {

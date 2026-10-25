@@ -1558,6 +1558,8 @@ function render() {
     : r.page === "mushaf" ? pageMushaf(r.id, r.tab, r.extra)
     : r.page === "stats" ? pageStats(r.id, r.tab)
     : r.page === "assign" ? pageAssign()
+    : r.page === "sard" ? pageSardList(r.id)
+    : r.page === "home" && isSardTeacher() ? pageSardList()
     : (pages[r.page] || pageHome)();
   if (r.page === "mushaf") afterMushafRender();
   const navKey = r.page === "student" || r.page === "assign" ? "students" : r.page;
