@@ -305,7 +305,69 @@ const teacherLine = (r, st) => {
   return t ? `👤 المعلم: ${t.name}` : "";
 };
 function mistakesLines(ms) {
-  return ms.map((m, i) => `${i + 1}. سورة ${surahName(m.surah)} آية ${m.ayah}${m.note ? ` — ${m.note}` : ""}`).join("\n");
+  return ms.map((m, i) => `${i + 1}. سورة ${surahName(m.surah)} آية ${m.ayah}${m.word ? `: «${m.word}»` : ""}${m.note ? ` — ${m.note}` : ""}`).join("\n");
+}
+
+/* ---------- تحديد الخطأ بالضغط على الكلمة في المصحف ---------- */
+function pickPageHtml(p, marks) {
+  const first = PAGE_STARTS[p - 1], last = p < TOTAL_PAGES ? PAGE_STARTS[p] - 1 : 6236;
+  let h = "";
+  for (let g = first; g <= last; g++) {
+    const [s, a] = fromGlobal(g);
+    if (a === 1) h += `<div class="pk-shead">سورة ${surahName(s)}</div>${s !== 1 && s !== 9 ? `<div class="pk-basm">${ayahText(1, 1)}</div>` : ""}`;
+    h += ayahText(s, a).split(" ").map((w, i) => `<span class="w${marks.has(`${s}|${a}|${i}`) ? " on" : ""}" data-s="${s}" data-a="${a}" data-i="${i}">${w}</span>`).join(" ") +
+      ` <span class="ayah-no${marks.has(`${s}|${a}|`) ? " on" : ""}" data-s="${s}" data-a="${a}">${toArabicDigits(a)}</span> `;
+  }
+  return h;
+}
+const pickerHtml = () => `<div class="mpick" hidden>
+    <div class="pk-bar">
+      <button type="button" class="btn sm" data-pk-move="-1" aria-label="الصفحة السابقة">→</button>
+      <b class="grow" data-pk-title></b>
+      <button type="button" class="btn sm" data-pk-move="1" aria-label="الصفحة التالية">←</button>
+      <button type="button" class="btn sm primary" data-pk-done>تم ✓</button>
+    </div>
+    <p class="small muted" style="margin:6px 0">اضغط على الكلمة التي أخطأ فيها، أو على رقم الآية إن كان الخطأ في الآية كاملة. والضغطة الثانية تلغيه.</p>
+    <div class="pk-page qw" data-pk-page></div>
+  </div>`;
+// يُستعمل داخل نموذج التسميع: الأخطاء المختارة تصير صفوفاً في قائمة الأخطاء
+function mushafPicker(form, onChange) {
+  const box = $(".mpick", form);
+  let page = 1;
+  const marks = () => new Set($$(".mrow", form).map((r) => r.dataset.key).filter(Boolean));
+  const show = () => {
+    $("[data-pk-title]", box).textContent = `صفحة ${page}${PAGE_SURAH ? ` — سورة ${surahName(PAGE_SURAH[page - 1])}` : ""}`;
+    $("[data-pk-page]", box).innerHTML = pickPageHtml(page, marks());
+    $("[data-pk-page]", box).scrollTop = 0;
+  };
+  const open = (p) => {
+    page = Math.min(TOTAL_PAGES, Math.max(1, p || 1));
+    form.classList.add("picking"); dlg.classList.add("picking"); box.hidden = false;
+    $("[data-pk-page]", box).textContent = "جارٍ تحميل المصحف…";
+    loadQuran().then(show).catch(() => { $("[data-pk-page]", box).textContent = "تعذّر تحميل المصحف، تأكد من الإنترنت."; });
+  };
+  const close = () => { form.classList.remove("picking"); dlg.classList.remove("picking"); box.hidden = true; };
+  const click = (e) => {
+    if (e.target.closest("[data-pk-done]")) { close(); return true; }
+    const mv = e.target.closest("[data-pk-move]");
+    if (mv) { page = Math.min(TOTAL_PAGES, Math.max(1, page + Number(mv.dataset.pkMove))); show(); return true; }
+    const w = e.target.closest(".mpick .w, .mpick .ayah-no");
+    if (!w) return false;
+    const s = Number(w.dataset.s), a = Number(w.dataset.a), whole = w.classList.contains("ayah-no");
+    const i = whole ? "" : Number(w.dataset.i);
+    const key = `${s}|${a}|${i}`;
+    const row = $$(".mrow", form).find((r) => r.dataset.key === key);
+    if (row) { row.remove(); w.classList.remove("on"); }
+    else {
+      $(".mrows", form).insertAdjacentHTML("beforeend", mistakeRow({ surah: s, ayah: a, fromMushaf: true,
+        word: whole ? "" : ayahText(s, a).split(" ")[i], wordIndex: whole ? undefined : i }));
+      w.classList.add("on");
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
+    }
+    onChange();
+    return true;
+  };
+  return { open, click };
 }
 function buildDailyMessage(r) {
   const st = getStudent(r.studentId);
@@ -484,7 +546,10 @@ function sardSendDialog(id) {
 
 /* ---------- نموذج التسميع اليومي ---------- */
 function mistakeRow(m = {}) {
-  return `<div class="mrow">
+  const hasIdx = Number.isInteger(m.wordIndex);
+  return `<div class="mrow" data-key="${m.surah && m.ayah ? `${m.surah}|${m.ayah}|${hasIdx ? m.wordIndex : ""}` : ""}">
+    ${m.word || (m.surah && m.ayah && !hasIdx && m.fromMushaf) ? `<span class="mword">${m.word ? `<span class="qw">${esc(m.word)}</span>` : "الآية كاملة"}</span>` : ""}
+    <input type="hidden" name="mWord" value="${esc(m.word || "")}"><input type="hidden" name="mIdx" value="${hasIdx ? m.wordIndex : ""}">
     <select name="mSurah" aria-label="السورة">${surahOptions(m.surah || 1)}</select>
     <input name="mAyah" type="number" min="1" inputmode="numeric" placeholder="الآية" aria-label="رقم الآية" value="${m.ayah || ""}">
     <input name="mNote" placeholder="الخطأ (اختياري)" aria-label="وصف الخطأ" value="${esc(m.note || "")}">
@@ -541,17 +606,19 @@ function dailyForm(studentId, rec = null, preset = {}) {
       </details>
     </div>
     <div class="mistakes-box">
-      <div class="row between"><p class="field-label" style="margin:0">الآيات التي وقع فيها الخطأ</p>
-        <button type="button" class="btn sm" data-add-m>+ خطأ</button></div>
+      <div class="row between"><p class="field-label" style="margin:0">الأخطاء</p>
+        <div class="row"><button type="button" class="btn sm primary" data-pick-m>📖 حدّد الخطأ في المصحف</button>
+        <button type="button" class="btn sm" data-add-m>+ يدوياً</button></div></div>
       <div class="mrows">${(r.mistakes || []).map(mistakeRow).join("")}</div>
-      <p class="small muted" data-m-hint>${(r.mistakes || []).length ? "" : "لا أخطاء. اضغط «+ خطأ» لتسجيل الآية."}</p>
+      <p class="small muted" data-m-hint>${(r.mistakes || []).length ? "" : "لا أخطاء."}</p>
     </div>
     <label><span>ملاحظة (اختياري، تُرسل في التقرير)</span><input name="notes" value="${esc(r.notes || "")}"></label>
     <div class="dlg-actions">
       <button type="button" class="btn" data-close>إلغاء</button>
       <button class="btn primary">حفظ</button>
       <button class="btn whatsapp" data-send-after>حفظ وإرسال 📤</button>
-    </div>`, (fd, f, submitter) => {
+    </div>
+    ${pickerHtml()}`, (fd, f, submitter) => {
     const status = fd.get("status"), k = fd.get("kind");
     const newPages = Math.max(0, Number(fd.get("newPages")) || 0), reviewPages = Math.max(0, Number(fd.get("reviewPages")) || 0);
     let fromPage = Number(fd.get("fromPage")) || 0, toPage = Number(fd.get("toPage")) || 0;
@@ -561,11 +628,14 @@ function dailyForm(studentId, rec = null, preset = {}) {
     if (!newPages) fromPage = toPage = 0;
     const ms = [];
     const surahs = fd.getAll("mSurah"), ayahs = fd.getAll("mAyah"), notes = fd.getAll("mNote");
+    const words = fd.getAll("mWord"), idxs = fd.getAll("mIdx");
     for (let i = 0; i < surahs.length; i++) {
       const surah = Number(surahs[i]), ayah = Number(ayahs[i]);
       if (!ayah && !notes[i].trim()) continue;
       if (!(ayah >= 1 && ayah <= surahAyahs(surah))) { toast(`رقم الآية غير صحيح في سورة ${surahName(surah)} (1–${surahAyahs(surah)})`); return false; }
-      ms.push({ surah, ayah, note: notes[i].trim() });
+      const m = { surah, ayah, note: notes[i].trim() };
+      if (words[i]) { m.word = words[i]; m.wordIndex = Number(idxs[i]); }
+      ms.push(m);
     }
     const data = {
       date: fd.get("date") || date, kind: k, status, teacherId: fd.get("teacherId"),
@@ -592,6 +662,12 @@ function dailyForm(studentId, rec = null, preset = {}) {
     const notify = (submitter && "sendAfter" in submitter.dataset) || (!rec && (status !== "done" || isStudent()));
     if (notify) setTimeout(() => dailySendDialog(target.id));
   }, (e) => {
+    if (picker.click(e)) return;
+    if (e.target.closest("[data-pick-m]")) {
+      const f = Number($("[name=fromPage]", form).value) || ayahPage(Number($("[name=reachSurah]", form).value) || 1, Number($("[name=reachAyah]", form).value) || 1);
+      picker.open(f);
+      return;
+    }
     if (e.target.closest("[data-add-m]")) {
       const rows = $(".mrows", form);
       const prev = $$("[name=mSurah]", rows).pop();
@@ -605,11 +681,12 @@ function dailyForm(studentId, rec = null, preset = {}) {
     }
   });
 
+  const picker = mushafPicker(form, () => syncStatus());
   // تجاوز عدد الأخطاء المسموح يجعل النتيجة «أخطأ» ما لم يغيّرها الشيخ بنفسه
   let statusTouched = !!rec;
   const syncStatus = () => {
     const n = $$(".mrow", form).length;
-    $("[data-m-hint]", form).textContent = n ? "" : "لا أخطاء. اضغط «+ خطأ» لتسجيل الآية.";
+    $("[data-m-hint]", form).textContent = n ? "" : "لا أخطاء.";
     if (statusTouched) return;
     const val = n > (Number(db.settings.passMistakes) || 0) ? "failed" : "done";
     $(`[name=status][value=${val}]`, form).checked = true;
@@ -809,7 +886,7 @@ function dailyCard(r) {
     ${r.status !== "absent" && (r.newPages != null || r.reviewPages) ? `<div class="small">📖 حفظ جديد: ${wajhAr(Number(r.newPages) || 0)}${Number(r.reviewPages) ? ` · 🔁 مراجعة: ${wajhAr(Number(r.reviewPages))}` : ""}${n ? ` <span class="muted">(${pageRangeText(r)})</span>` : ""}</div>` : ""}
     <div class="muted small">${fmtDate(r.date)}${n && r.newPages == null ? ` · ${wajhAr(n)}` : ""}${getTeacher(r.teacherId) ? ` · ${esc(getTeacher(r.teacherId).name)}` : ""}${r.sentAt ? ` · <span class="badge ok">أُرسل ✓</span>` : ""}</div>
     ${r.bySelf ? `<div style="margin-top:4px">${selfBadge(r)}</div>` : ""}
-    ${ms.length ? `<div class="small" style="margin-top:6px">📌 ${ms.map((m) => `<span class="badge warn">${surahName(m.surah)} ${m.ayah}${m.note ? `: ${esc(m.note)}` : ""}</span>`).join(" ")}</div>` : ""}
+    ${ms.length ? `<div class="small" style="margin-top:6px">📌 ${ms.map((m) => `<span class="badge warn">${surahName(m.surah)} ${m.ayah}${m.word ? `: <span class="qw">${esc(m.word)}</span>` : ""}${m.note ? ` — ${esc(m.note)}` : ""}</span>`).join(" ")}</div>` : ""}
     ${r.notes ? `<div class="small" style="margin-top:4px">📝 ${esc(r.notes)}</div>` : ""}
     <div class="row" style="margin-top:8px">
       <button class="btn sm whatsapp" data-daily-send="${r.id}">📤 ${r.sentAt ? "إعادة إرسال" : "إرسال"}</button>

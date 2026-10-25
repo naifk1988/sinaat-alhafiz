@@ -288,6 +288,7 @@ function openDialog(html, onSubmit, onClick = null) {
   form.innerHTML = html;
   form.onclick = onClick;
   form.onchange = form.oninput = null;
+  form.classList.remove("picking"); dlg.classList.remove("picking");
   form.onsubmit = (e) => {
     e.preventDefault();
     if (onSubmit(new FormData(form), form, e.submitter) !== false) dlg.close();

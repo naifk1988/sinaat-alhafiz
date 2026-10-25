@@ -498,3 +498,15 @@ body.student-mode, body.login-mode { padding-bottom: 24px; }
 .stats.two { grid-template-columns: repeat(2, 1fr); }
 .more { margin: 4px 0 10px; } .more summary { cursor: pointer; color: var(--primary); padding: 6px 0; } .more[open] summary { margin-bottom: 8px; }
 .reach { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
+/* تحديد الخطأ في المصحف داخل نموذج التسميع */
+dialog.picking { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; }
+#dlg-form.picking > :not(.mpick) { display: none !important; }
+.mpick { display: flex; flex-direction: column; height: calc(100dvh - 32px); }
+.pk-bar { display: flex; align-items: center; gap: 8px; position: sticky; top: 0; background: var(--card); }
+.pk-page { flex: 1; overflow-y: auto; font-size: 1.45rem; line-height: 2.3; text-align: justify; background: var(--m-paper); color: var(--m-ink); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.pk-page .w, .pk-page .ayah-no { cursor: pointer; border-radius: 6px; padding: 0 1px; }
+.pk-page .ayah-no { color: var(--primary); font-size: .85em; }
+.pk-page .on { background: var(--danger-soft); color: var(--danger); outline: 1px solid var(--danger); }
+.pk-shead { text-align: center; font-weight: 700; margin: 6px 0; border: 1px solid var(--frame); border-radius: 8px; background: var(--frame-soft); }
+.pk-basm { text-align: center; }
+.mword { grid-column: 1 / -1; font-size: 1.2rem; color: var(--danger); }
