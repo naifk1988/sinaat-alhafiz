@@ -155,8 +155,12 @@ async function syncInit() {
   await checkCloud();
   if (loginRequired() !== wasLogin || (parseRoute().page === "settings" && !dlg.open)) render();
   if (auth) syncNow();
-  setInterval(() => { if (document.visibilityState === "visible") syncNow(); }, 45000);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncNow(); });
+  // مزامنة دورية كل دقيقتين ما دامت الصفحة ظاهرة، وعند العودة إليها بعد دقيقة على الأقل،
+  // لتبقى العمليات ضمن الخطة المجانية لقاعدة البيانات
+  setInterval(() => { if (document.visibilityState === "visible") syncNow(); }, 120000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && Date.now() - lastSync > 60000) syncNow();
+  });
   window.addEventListener("online", () => syncNow());
 }
 
