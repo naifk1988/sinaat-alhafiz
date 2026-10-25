@@ -813,6 +813,71 @@ function weekBoard(students, ws) {
 
 const progressBar = (x, label) => `<div class="bar" role="img" aria-label="${label}"><i style="width:${Math.max(0, Math.min(100, x * 100)).toFixed(1)}%"></i></div>`;
 
+/* ---------- تنبيه نهاية اليوم: من غاب أو لم ينجز ---------- */
+const alertHour = () => Number(db.settings.alertHour ?? 23);
+// اليوم بعد ساعة التنبيه، أو الأمس حتى الظهر إن لم يُرسل تنبيهه
+function alertDate() {
+  const now = new Date(), today = todayStr(now);
+  if (now.getHours() >= alertHour() && programDays().includes(now.getDay())) return today;
+  const y = addDays(today, -1);
+  if (now.getHours() < 12 && programDays().includes(dowOf(y))) return y;
+  return "";
+}
+function dayIssues(date, tid = "") {
+  const out = { absent: [], none: [], failed: [] };
+  for (const st of db.students) {
+    const t = teacherAt(st, date);
+    if (tid && t !== tid) continue;
+    if ((getTeacher(t) || {}).kind === "sard") continue;
+    const r = regularOn(st.id, date);
+    if (!r) out.none.push({ st });
+    else if (r.status === "absent" && !r.madeUpBy) out.absent.push({ st, r });
+    else if (r.status === "failed" && !r.madeUpBy) out.failed.push({ st, r });
+  }
+  out.count = out.absent.length + out.none.length + out.failed.length;
+  return out;
+}
+function buildAlertMessage(date, tid = "") {
+  const t = getTeacher(tid);
+  const names = (list) => list.map((x) => x.st.name).join("، ");
+  const block = (tid2) => {
+    const d = dayIssues(date, tid2);
+    return [d.absent.length ? `🚫 غابوا (${d.absent.length}): ${names(d.absent)}` : "",
+      d.none.length ? `⏺️ لم يسجّلوا تسميعاً (${d.none.length}): ${names(d.none)}` : "",
+      d.failed.length ? `❌ لم ينجزوا بسبب الخطأ (${d.failed.length}):\n${d.failed.map((x) => `• ${x.st.name}${(x.r.mistakes || []).length
+        ? ` — ${x.r.mistakes.map((m) => `${surahName(m.surah)} ${m.ayah}${m.word ? `: «${m.word}»` : ""}`).join("، ")}` : ""}`).join("\n")}` : ""].filter(Boolean).join("\n");
+  };
+  const head = ["السلام عليكم ورحمة الله وبركاته", `⚠️ تنبيه ${programName()} — ${fmtDate(date)}`];
+  let body;
+  if (tid) body = [`حلقة الشيخ ${t ? t.name : ""}`, block(tid)];
+  else {
+    const groups = halaqaTeachers().map((x) => ({ x, b: dayIssues(date, x.id).count ? block(x.id) : "" })).filter((g) => g.b);
+    const noTeacher = dayIssues(date).count && !halaqaTeachers().length ? [block("")] : [];
+    body = [...groups.map((g) => `👤 حلقة الشيخ ${g.x.name}:\n${g.b}`), ...noTeacher];
+  }
+  return [...head, ...body, "", `↩️ يلزمهم التعويض يوم ${fmtDate(makeupDateFor(date))}`].join("\n");
+}
+function alertCardHtml() {
+  if (isStudent() || isSardTeacher()) return "";
+  const date = alertDate();
+  if (!date) return "";
+  const all = dayIssues(date);
+  if (!all.count) return `<div class="card"><b>✅ ${date === todayStr() ? "اليوم" : "أمس"}: أنجز جميع الطلاب وردهم</b></div>`;
+  const sent = (db.settings.alertSent || {})[date] || {};
+  const mine = auth && auth.role === "teacher" ? auth.teacherId : "";
+  const tlist = halaqaTeachers().filter((t) => dayIssues(date, t.id).count && (!mine || t.id === mine));
+  const btn = (key, label, tid) => `<button class="btn sm ${sent[key] ? "" : "whatsapp"}" data-alert-send="${date}" data-tid="${tid}" data-key="${key}">${sent[key] ? "✓ " : "📤 "}${label}</button>`;
+  return `<div class="card notice">
+    <b>⚠️ تنبيه ${date === todayStr() ? "اليوم" : "أمس"} — ${fmtDate(date)}</b>
+    <div class="small">${all.absent.length ? `🚫 غاب ${all.absent.length} · ` : ""}${all.none.length ? `⏺️ لم يسجّل ${all.none.length} · ` : ""}${all.failed.length ? `❌ لم ينجز ${all.failed.length}` : ""}</div>
+    <div class="small muted">${[...all.absent, ...all.none, ...all.failed].map((x) => esc(x.st.name)).join("، ")}</div>
+    <div class="row" style="margin-top:8px">
+      ${tlist.map((t) => btn(t.id, `للشيخ ${esc(t.name)}`, t.id)).join("")}
+      ${mine ? "" : btn("sup", "للمشرف", "")}
+      ${all.none.length ? `<button class="btn sm" data-mark-absent="${date}">🚫 تسجيل غياب من لم يسجّل (${all.none.length})</button>` : ""}
+    </div></div>`;
+}
+
 const pendingApprovals = () => [
   ...db.daily.filter((r) => r.bySelf && !r.approved).map((r) => ({ c: "daily", r })),
   ...db.sard.filter((r) => r.bySelf && !r.approved).map((r) => ({ c: "sard", r }))
@@ -842,6 +907,7 @@ function programHomeSection() {
   const reportKey = left <= 3 ? cur : sinceStart <= 4 ? prev : "";
   const missingExams = reportKey ? sts.filter((st) => !examFor(st.id, reportKey)).length : 0;
   return `
+    ${alertCardHtml()}
     ${reportKey ? `<div class="card notice">
       <b>🗓️ ${reportKey === cur ? `اقتربت نهاية شهر ${fmtMonth(cur)}${left ? ` (بقي ${left === 1 ? "يوم" : left === 2 ? "يومان" : `${left} أيام`})` : " — اليوم آخره"}` : `انتهى شهر ${fmtMonth(prev)}`}</b>
       <div class="small">${missingExams ? `لم تُرصد درجة الاختبار لـ ${missingExams} من ${sts.length} طالب. ` : "رُصدت درجات الاختبار. "}التقرير الشهري جاهز للإرسال.</div>
@@ -1177,6 +1243,29 @@ function programClick(t) {
   }
   if (d.exam) { examDialog(d.exam, d.ids ? d.ids.split(",").filter(Boolean) : []); return true; }
   if ("print" in d) { window.print(); return true; }
+  if (d.alertSend) {
+    const t = getTeacher(d.tid);
+    const recipients = d.tid ? (t && t.phone ? [{ label: `الشيخ ${t.name}`, phone: t.phone }] : [])
+      : db.settings.supervisorPhone ? [{ label: `المشرف${db.settings.supervisorName ? ` (${db.settings.supervisorName})` : ""}`, phone: db.settings.supervisorPhone }] : [];
+    multiSendDialog({ title: d.tid ? `تنبيه للشيخ ${esc(t ? t.name : "")}` : "تنبيه للمشرف", text: buildAlertMessage(d.alertSend, d.tid), recipients,
+      onSent: () => {
+        const all = db.settings.alertSent || {};
+        // يُحتفظ بآخر أسبوعين فقط
+        for (const k of Object.keys(all)) if (k < addDays(todayStr(), -14)) delete all[k];
+        all[d.alertSend] = { ...(all[d.alertSend] || {}), [d.key]: true };
+        db.settings.alertSent = all;
+      } });
+    return true;
+  }
+  if (d.markAbsent) {
+    const list = dayIssues(d.markAbsent).none;
+    confirmDialog(`تسجيل ${list.length} ${list.length === 1 ? "طالب" : "طلاب"} غائبين يوم ${fmtDate(d.markAbsent)}؟ يلزمهم التعويض.`, () => {
+      for (const { st } of list) db.daily.push({ id: uid(), studentId: st.id, date: d.markAbsent, kind: "regular", status: "absent",
+        fromPage: 0, toPage: 0, mistakes: [], teacherId: teacherAt(st, d.markAbsent), createdAt: Date.now(), updatedAt: Date.now() });
+      save(); render(); toast("تم تسجيل الغياب");
+    }, "تسجيل الغياب");
+    return true;
+  }
   if (d.sardSummary) {
     multiSendDialog({ title: "ملخص سرد اليوم", text: buildSardDaySummary(d.sardSummary), recipients: staffRecipients() });
     return true;
@@ -1201,6 +1290,8 @@ function programSettingsHtml() {
     </div>
     <label><span>عدد الأخطاء المسموح ليُعدّ الورد منجزاً</span><select name="passMistakes">${[0, 1, 2, 3].map((n) =>
       `<option value="${n}" ${n === (Number(s.passMistakes) || 0) ? "selected" : ""}>${n === 0 ? "لا شيء — أي خطأ يوجب التعويض" : n}</option>`).join("")}</select></label>
+    <label><span>وقت تنبيه من غاب أو لم ينجز</span><select name="alertHour">${[19, 20, 21, 22, 23].map((h) =>
+      `<option value="${h}" ${h === alertHour() ? "selected" : ""}>${h - 12} مساءً</option>`).join("")}</select></label>
     <label><span>الدرجة الكاملة للاختبار الشهري</span><input name="examMax" type="number" min="1" inputmode="numeric" value="${examMax()}"></label>
     <p class="field-label">المعلمون وشيخ السرد</p>
     ${list.map((t) => `<div class="grid2"><input type="hidden" name="tId" value="${esc(t.id || "")}">
@@ -1230,7 +1321,7 @@ function readProgramSettings(fd) {
   return {
     programName: fd.get("programName").trim() || "برنامج صناعة الحافظ",
     programDays: days.length ? days : [0, 1, 2, 3], makeupDay: Number(fd.get("makeupDay")),
-    dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1), examMax: Math.max(1, Number(fd.get("examMax")) || 100), passMistakes: Number(fd.get("passMistakes")) || 0,
+    dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1), examMax: Math.max(1, Number(fd.get("examMax")) || 100), alertHour: Number(fd.get("alertHour")) || 23, passMistakes: Number(fd.get("passMistakes")) || 0,
     teachers: list, supervisorName: fd.get("supervisorName").trim(), supervisorPhone: fd.get("supervisorPhone").trim()
   };
 }
