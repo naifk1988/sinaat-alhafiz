@@ -66,6 +66,31 @@ const makeupDateFor = (s) => addDays(s, (makeupDay() - dowOf(s) + 7) % 7 || 7);
 const teachers = () => db.settings.teachers || [];
 const getTeacher = (id) => teachers().find((t) => t.id === id);
 const teacherOf = (st) => st && getTeacher(st.teacherId);
+// الطلاب يتنقلون بين المعلمين، فيُحفظ سجل التنقل ليُنسب كل شهر إلى معلمه في ذلك الوقت
+function teacherAt(st, date) {
+  const h = st.teacherHistory;
+  if (!h || !h.length) return st.teacherId || "";
+  let t = "";
+  for (const x of [...h].sort((a, b) => a.from.localeCompare(b.from))) if (x.from <= date) t = x.teacherId;
+  return t;
+}
+function setTeacher(st, tid, from = todayStr()) {
+  tid = tid || "";
+  if ((st.teacherId || "") === tid) return false;
+  const h = st.teacherHistory || [{ teacherId: st.teacherId || "", from: "0000-00-00" }];
+  st.teacherHistory = h.filter((x) => x.from < from).concat({ teacherId: tid, from });
+  st.teacherId = tid;
+  return true;
+}
+// كل من علّم الطالب خلال الشهر (أكثر من معلم إن انتقل في أثنائه)
+function monthTeachers(st, ym) {
+  const { first, last } = monthRange(ym);
+  const end = last < todayStr() ? last : todayStr();
+  const ids = [teacherAt(st, first)];
+  for (const x of st.teacherHistory || []) if (x.from > first && x.from <= end) ids.push(x.teacherId);
+  return [...new Set(ids.filter(Boolean))];
+}
+const inTeacherMonth = (st, tid, ym) => !tid || monthTeachers(st, ym).includes(tid);
 const dailyPagesOf = (st) => Number(st.dailyPages) || Number(db.settings.dailyPages) || 1;
 function teacherOptions(selected) {
   return `<option value="">—</option>` + teachers().map((t) => `<option value="${t.id}" ${t.id === selected ? "selected" : ""}>${esc(t.name)}</option>`).join("");
@@ -260,7 +285,7 @@ function buildDailyMessage(r) {
 }
 
 function buildDaySummary(date, tid = "") {
-  const sts = db.students.filter((s) => !tid || s.teacherId === tid);
+  const sts = db.students.filter((s) => !tid || teacherAt(s, date) === tid);
   const groups = { done: [], failed: [], absent: [], none: [], makeup: [] };
   for (const st of sts) {
     const recs = studentDaily(st.id).filter((r) => r.date === date);
@@ -299,9 +324,9 @@ function khatmText(k) {
 }
 function buildMonthlyReport(st, ym) {
   const m = monthStats(st, ym);
-  const t = teacherOf(st);
+  const tn = monthTeachers(st, ym).map(getTeacher).filter(Boolean).map((t) => t.name);
   return ["السلام عليكم ورحمة الله وبركاته",
-    `📊 التقرير الشهري — ${programName()}`, `🗓️ شهر ${fmtMonth(ym)}`, `🎓 الطالب: ${st.name}`, t ? `👤 المعلم: ${t.name}` : "",
+    `📊 التقرير الشهري — ${programName()}`, `🗓️ شهر ${fmtMonth(ym)}`, `🎓 الطالب: ${st.name}`, tn.length ? `👤 المعلم: ${tn.join(" ثم ")}` : "",
     "",
     `📍 وصل في الحفظ إلى: ${reachedText(m.reached)}`,
     `📝 الاختبار الشهري: ${examText(m.exam)}`,
@@ -319,7 +344,7 @@ function buildMonthlyReport(st, ym) {
     khatmText(m.khatm)].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n").replace(/\n{3,}/g, "\n\n");
 }
 function buildMonthSummary(ym, tid = "") {
-  const sts = db.students.filter((s) => !tid || s.teacherId === tid).sort((a, b) => a.name.localeCompare(b.name, "ar"));
+  const sts = db.students.filter((s) => inTeacherMonth(s, tid, ym)).sort((a, b) => a.name.localeCompare(b.name, "ar"));
   const t = getTeacher(tid);
   const rows = sts.map((st, i) => {
     const m = monthStats(st, ym);
@@ -422,7 +447,7 @@ function dailyForm(studentId, rec = null, preset = {}) {
   const kind = rec ? rec.kind || "regular" : preset.kind || (owed.length && dowOf(date) === makeupDay() ? "makeup" : "regular");
   const firstOwed = owed.find((x) => pagesOf(x));
   const [nf, nt] = kind === "makeup" && firstOwed && !rec ? [firstOwed.fromPage, firstOwed.toPage] : nextPages(st);
-  const r = rec || { fromPage: nf, toPage: nt, status: "done", mistakes: [], teacherId: st.teacherId || "" };
+  const r = rec || { fromPage: nf, toPage: nt, status: "done", mistakes: [], teacherId: teacherAt(st, date) };
   const checked = (x) => (rec ? (rec.makeupFor || []).includes(x.id) : x === owed[0]);
 
   const form = openDialog(`
@@ -755,7 +780,7 @@ function pageStats(ymArg, tidArg) {
   const ym = /^\d{4}-\d{2}$/.test(ymArg || "") ? ymArg : currentMonth();
   const range = monthRange(ym);
   const tid = tidArg || "";
-  const sts = db.students.filter((s) => !tid || s.teacherId === tid).sort((a, b) => a.name.localeCompare(b.name, "ar"));
+  const sts = db.students.filter((s) => inTeacherMonth(s, tid, ym)).sort((a, b) => a.name.localeCompare(b.name, "ar"));
   const rows = sts.map((st) => ({ st, m: monthStats(st, ym) }));
   const sum = (k) => rows.reduce((a, x) => a + x.m[k], 0);
   const required = sum("required"), achieved = sum("achieved");
@@ -770,7 +795,7 @@ function pageStats(ymArg, tidArg) {
   const maxW = Math.max(1, ...weeks.map((w) => w.n));
 
   const byTeacher = teachers().map((t) => {
-    const rs = rows.filter((x) => x.st.teacherId === t.id);
+    const rs = rows.filter((x) => monthTeachers(x.st, ym).includes(t.id));
     const req = rs.reduce((a, x) => a + x.m.required, 0), ach = rs.reduce((a, x) => a + x.m.achieved, 0);
     return { t, n: rs.length, rate: req ? ach / req : null, pages: rs.reduce((a, x) => a + x.m.pages, 0), sard: rs.reduce((a, x) => a + x.m.sardPages, 0) };
   }).filter((x) => x.n);
@@ -835,6 +860,38 @@ function pageStats(ymArg, tidArg) {
         <button class="btn sm" data-sard-new="${st.id}">+ سرد</button>
       </div>
     </div>`).join("") : `<div class="card empty">لا يوجد طلاب</div>`}`;
+}
+
+/* ---------- توزيع الطلاب على المعلمين ---------- */
+function pageAssign() {
+  const sts = [...db.students].sort((a, b) => (a.teacherId || "").localeCompare(b.teacherId || "") || a.name.localeCompare(b.name, "ar"));
+  const cur = currentMonth();
+  const count = (id) => db.students.filter((s) => (s.teacherId || "") === id).length;
+  return `
+    <h1>توزيع الطلاب على المعلمين</h1>
+    <p class="small muted">غيّر معلم من تريد ثم اضغط «حفظ». تبقى تقارير الأشهر السابقة باسم المعلم الذي كان معه.</p>
+    ${teachers().length ? `<div class="stats">${teachers().map((t) => `<div class="stat"><b>${count(t.id)}</b><span>${esc(t.name)}</span></div>`).join("")}</div>` : `<div class="card empty">أضف المعلمين أولاً من الإعدادات</div>`}
+    <form id="assign-form" class="card">
+      <p class="field-label" style="margin-top:0">يبدأ التغيير</p>
+      ${chips("from", [[monthRange(cur).first, `من بداية شهر ${fmtMonth(cur)}`], [todayStr(), "من اليوم"]], monthRange(cur).first)}
+      <ul class="list" style="margin-top:10px">${sts.map((st) => `<li class="row between">
+        <a class="grow" href="#/student/${st.id}"><b>${esc(st.name)}</b></a>
+        <select name="t_${st.id}" style="width:auto;min-width:140px" aria-label="معلم ${esc(st.name)}">${teacherOptions(st.teacherId)}</select></li>`).join("")}</ul>
+      ${sts.length ? `<button class="btn primary block" style="margin-top:10px">حفظ التوزيع</button>` : `<p class="empty">لا يوجد طلاب</p>`}
+    </form>`;
+}
+function saveAssign(form) {
+  const fd = new FormData(form);
+  const from = fd.get("from") || todayStr();
+  let n = 0;
+  for (const st of db.students) if (fd.has(`t_${st.id}`) && setTeacher(st, fd.get(`t_${st.id}`), from)) { st.updatedAt = Date.now(); n++; }
+  save(); render();
+  toast(n ? `نُقل ${n} ${n === 1 ? "طالب" : n === 2 ? "طالبان" : "طلاب"}` : "لا تغيير");
+}
+function teacherHistoryHtml(st) {
+  const h = (st.teacherHistory || []).filter((x) => x.teacherId).sort((a, b) => b.from.localeCompare(a.from));
+  if (h.length < 2) return "";
+  return `<p><b>تنقلات المعلمين:</b><br>${h.map((x) => `<span class="small">${esc((getTeacher(x.teacherId) || {}).name || "—")} — ${x.from === "0000-00-00" ? "من البداية" : `من ${fmtDate(x.from)}`}</span>`).join("<br>")}</p>`;
 }
 
 /* ---------- الأحداث ---------- */
@@ -957,7 +1014,7 @@ function studentDirectionField(st) {
 }
 function readStudentProgramFields(fd) {
   return {
-    teacherId: fd.get("teacherId"), dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1),
+    dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1),
     memorizedBefore: Math.min(TOTAL_PAGES, Math.max(0, Number(fd.get("memorizedBefore")) || 0)), direction: fd.get("direction")
   };
 }

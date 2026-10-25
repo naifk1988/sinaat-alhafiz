@@ -325,9 +325,9 @@ function studentForm(st = {}) {
       ...readStudentProgramFields(fd), updatedAt: Date.now()
     };
     let invite = null;
-    if (st.id) Object.assign(st, data);
+    if (st.id) { Object.assign(st, data); setTeacher(st, fd.get("teacherId")); }
     else {
-      const n = { id: uid(), createdAt: Date.now(), ...data };
+      const n = { id: uid(), createdAt: Date.now(), ...data, teacherId: fd.get("teacherId") };
       // مع المزامنة: يُنشأ رمز الطالب تلقائياً ويُرسل له رابط دخول مباشر
       if (cloudActive()) { n.loginCode = newCode(); invite = n.id; }
       db.students.push(n); location.hash = `#/student/${n.id}`;
@@ -650,12 +650,14 @@ function pageStudents() {
   const q = pageStudents.q || "";
   const list = db.students.filter((s) => !q || s.name.includes(q)).sort((a, b) => a.name.localeCompare(b.name, "ar"));
   return `
-    <div class="row between"><h1>الطلاب (${db.students.length})</h1><button class="btn primary" data-action="add-student">+ طالب</button></div>
+    <div class="row between"><h1>الطلاب (${db.students.length})</h1>
+      <div class="row">${teachers().length ? `<a class="btn" href="#/assign">🔀 توزيع المعلمين</a>` : ""}<button class="btn primary" data-action="add-student">+ طالب</button></div></div>
     <input id="search" placeholder="بحث بالاسم…" value="${esc(q)}" style="margin-bottom:12px">
     <div class="card">${list.length ? `<ul class="list">${list.map((s) => {
-      const last = finishedSessions(s.id)[0];
+      const last = studentDaily(s.id)[0];
       const rep = groupMistakes(studentMistakes(s.id)).filter((g) => g.repeated && !g.resolved).length;
-      const info = [last ? `آخر تسميع: ${rangeText(last)}` : "لا يوجد تسميع بعد",
+      const info = [teacherOf(s) ? `👤 ${esc(teacherOf(s).name)}` : "",
+        last ? `آخر تسميع: ${DAYS[dowOf(last.date)]}${pagesOf(last) ? ` ${pageRangeText(last)}` : ""}` : "لا يوجد تسميع بعد",
         rep ? `<span class="badge danger">${rep} متكرر</span>` : ""].filter(Boolean).join(" · ");
       return studentRow(s, info);
     }).join("")}</ul>` : `<p class="empty">لا يوجد طلاب</p>`}</div>`;
@@ -738,6 +740,7 @@ function pageStudent(id, tab) {
       <p><b>ولي الأمر:</b> ${esc(st.guardianPhone) || "—"}</p>
       <p><b>الرواية:</b> ${esc(riwayaOf(st))}</p>
       <p><b>المعلم:</b> ${esc((teacherOf(st) || {}).name || "—")}</p>
+      ${teacherHistoryHtml(st)}
       <p><b>المقدار اليومي:</b> ${wajhAr(dailyPagesOf(st))} · <b>المحفوظ قبل البرنامج:</b> ${wajhAr(Number(st.memorizedBefore) || 0)}</p>
       <p><b>أيام الحلقة:</b> ${(st.days || []).map((d) => DAYS[d]).join("، ") || "—"} ${st.time ? "— " + fmtTime(st.time) : ""}</p>
       <p><b>آخر تذكير:</b> ${st.lastReminder ? new Date(st.lastReminder).toLocaleString("ar") : "—"}</p>
@@ -1554,9 +1557,10 @@ function render() {
   view.innerHTML = r.page === "student" ? pageStudent(r.id, r.tab)
     : r.page === "mushaf" ? pageMushaf(r.id, r.tab, r.extra)
     : r.page === "stats" ? pageStats(r.id, r.tab)
+    : r.page === "assign" ? pageAssign()
     : (pages[r.page] || pageHome)();
   if (r.page === "mushaf") afterMushafRender();
-  const navKey = r.page === "student" ? "students" : r.page;
+  const navKey = r.page === "student" || r.page === "assign" ? "students" : r.page;
   $$(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.nav === navKey));
 }
 
@@ -1671,6 +1675,7 @@ view.addEventListener("submit", (e) => {
     e.preventDefault();
     return login(new FormData(e.target).get("code"));
   }
+  if (e.target.id === "assign-form") { e.preventDefault(); return saveAssign(e.target); }
   if (e.target.id !== "settings-form") return;
   e.preventDefault();
   const fd = new FormData(e.target);
