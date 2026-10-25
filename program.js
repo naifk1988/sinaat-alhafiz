@@ -143,7 +143,49 @@ function reachedPage(st, until) {
   if (!set.size) return 0;
   return st.direction === "desc" ? Math.min(...set) : Math.max(...set);
 }
-const reachedText = (p) => (p ? `صفحة ${p} (سورة ${surahName(PAGE_SURAH[p - 1])})` : "لم يبدأ بعد");
+// الآية ← الصفحة، وأول الصفحة وآخرها (من جدول PAGE_STARTS في data.js)
+function ayahPage(s, a) {
+  const g = toGlobal(s, a);
+  let p = TOTAL_PAGES;
+  while (p > 1 && PAGE_STARTS[p - 1] > g) p--;
+  return p;
+}
+const pageStartAyah = (p) => fromGlobal(PAGE_STARTS[p - 1]);
+const pageEndAyah = (p) => fromGlobal(p < TOTAL_PAGES ? PAGE_STARTS[p] - 1 : 6236);
+// آخر ما وصل إليه: من آخر تسميع منجز سجّل فيه السورة والآية، وإلا من الصفحات
+function reachAt(st, until = "9999-12-31") {
+  const r = db.daily.filter((x) => x.studentId === st.id && x.status === "done" && x.reachSurah && x.date <= until)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt)[0];
+  if (r) return { surah: r.reachSurah, ayah: r.reachAyah };
+  const rb = st.reachedBefore && st.reachedBefore.surah ? st.reachedBefore : null;
+  const p = reachedPage(st, until);
+  if (!p || (rb && p === ayahPage(rb.surah, rb.ayah))) return rb;
+  const [surah, ayah] = st.direction === "desc" ? pageStartAyah(p) : pageEndAyah(p);
+  return { surah, ayah };
+}
+const reachLabel = (x) => (x ? `سورة ${surahName(x.surah)} آية ${x.ayah} (صفحة ${ayahPage(x.surah, x.ayah)})` : "لم يبدأ بعد");
+// اختيار السورة ثم الآية من قائمتين
+function ayahOptions(surah, selected) {
+  let h = "";
+  for (let i = 1; i <= surahAyahs(surah); i++) h += `<option value="${i}" ${i === Number(selected) ? "selected" : ""}>${i}</option>`;
+  return h;
+}
+function reachPicker(prefix, sel, label, allowNone = false) {
+  const s = sel && sel.surah ? sel.surah : allowNone ? 0 : 1;
+  return `<p class="field-label">${label}</p>
+    <div class="reach">
+      <select name="${prefix}Surah" data-ayahs="${prefix}Ayah" aria-label="السورة">${allowNone ? `<option value="0" ${!s ? "selected" : ""}>— لم يبدأ —</option>` : ""}${surahOptions(s)}</select>
+      <select name="${prefix}Ayah" aria-label="الآية" ${!s ? "disabled" : ""}>${s ? ayahOptions(s, sel && sel.ayah) : ""}</select>
+    </div>`;
+}
+// عند تغيير السورة تُملأ قائمة آياتها
+function syncAyahSelect(e, form) {
+  const name = e.target.dataset && e.target.dataset.ayahs;
+  if (!name) return;
+  const sel = $(`[name=${name}]`, form), s = Number(e.target.value);
+  sel.disabled = !s;
+  sel.innerHTML = s ? ayahOptions(s, 1) : "";
+}
 
 /* ---------- الاختبار الشهري ---------- */
 const examMax = () => Number(db.settings.examMax) || 100;
@@ -248,6 +290,9 @@ function monthStats(st, ym) {
   out.attended = out.done + out.failed;
   out.memorized = memorizedSet(st, last).size;
   out.reached = reachedPage(st, last);
+  out.reach = reachAt(st, last);
+  out.reachLabel = reachLabel(out.reach);
+  out.reviewPages = recs.filter((r) => r.status !== "absent").reduce((a, r) => a + (Number(r.reviewPages) || 0), 0);
   out.exam = examFor(st.id, ym);
   out.khatm = khatmProjection(st);
   return out;
@@ -269,7 +314,12 @@ function buildDailyMessage(r) {
   const lines = ["السلام عليكم ورحمة الله وبركاته",
     `📋 ${programName()} — ${r.kind === "makeup" ? "تعويض " : ""}${fmtDate(r.date)}`,
     `🎓 الطالب: ${st.name}`, teacherLine(r, st)];
-  if (n) lines.push(`📖 التسميع: ${pageRangeText(r)} (${wajhAr(n)})`);
+  if (r.status !== "absent") {
+    const np = r.newPages != null ? Number(r.newPages) : n;
+    if (np || n) lines.push(`📖 الحفظ الجديد: ${wajhAr(np)}${n ? ` (${pageRangeText(r)})` : ""}`);
+    if (Number(r.reviewPages)) lines.push(`🔁 المراجعة: ${wajhAr(Number(r.reviewPages))}`);
+    if (r.reachSurah) lines.push(`📍 وصل إلى: سورة ${surahName(r.reachSurah)} آية ${r.reachAyah}`);
+  }
   if (r.kind === "makeup") {
     const days = (r.makeupFor || []).map((id) => db.daily.find((x) => x.id === id)).filter(Boolean)
       .map((x) => `${fmtDate(x.date)} (${x.status === "absent" ? "غياب" : "خطأ"})`);
@@ -332,7 +382,7 @@ function buildMonthlyReport(st, ym) {
   return ["السلام عليكم ورحمة الله وبركاته",
     `📊 التقرير الشهري — ${programName()}`, `🗓️ شهر ${fmtMonth(ym)}`, `🎓 الطالب: ${st.name}`, tn.length ? `👤 المعلم: ${tn.join(" ثم ")}` : "",
     "",
-    `📍 وصل في الحفظ إلى: ${reachedText(m.reached)}`,
+    `📍 وصل في الحفظ إلى: ${m.reachLabel}`,
     `📝 الاختبار الشهري: ${examText(m.exam)}`,
     "",
     `🙋 الحضور: حضر ${m.attended} من ${m.required} يوماً${m.absent ? `، وغاب ${m.absent}` : ""}`,
@@ -343,6 +393,7 @@ function buildMonthlyReport(st, ym) {
     `📌 مجموع الأخطاء: ${m.mistakes}`,
     "",
     `📖 حفظ هذا الشهر: ${wajhAr(m.pages)}`,
+    `🔁 المراجعة هذا الشهر: ${wajhAr(m.reviewPages)}`,
     `📚 السرد هذا الشهر: ${wajhAr(m.sardPages)} في ${m.sardSittings} ${m.sardSittings === 1 ? "مجلس" : "مجالس"}`,
     `📗 مجموع المحفوظ: ${wajhAr(m.memorized)} من ${TOTAL_PAGES} (${pct(m.memorized / TOTAL_PAGES)})`,
     khatmText(m.khatm)].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n").replace(/\n{3,}/g, "\n\n");
@@ -353,8 +404,8 @@ function buildMonthSummary(ym, tid = "") {
   const rows = sts.map((st, i) => {
     const m = monthStats(st, ym);
     return [`${i + 1}. ${st.name}`,
-      `   📍 وصل إلى: ${reachedText(m.reached)} — المحفوظ ${wajhAr(m.memorized)}`,
-      `   📖 حفظ الشهر: ${wajhAr(m.pages)} · 📚 السرد: ${wajhAr(m.sardPages)}`,
+      `   📍 وصل إلى: ${m.reachLabel} — المحفوظ ${wajhAr(m.memorized)}`,
+      `   📖 حفظ الشهر: ${wajhAr(m.pages)} · 🔁 المراجعة: ${wajhAr(m.reviewPages)} · 📚 السرد: ${wajhAr(m.sardPages)}`,
       `   🙋 الحضور: ${m.attended}/${m.required}${m.absent ? ` (غاب ${m.absent})` : ""} · الإنجاز ${pct(m.rate)}${m.owed ? ` · ⚠️ لم يعوّض ${m.owed}` : ""}`,
       `   📝 الاختبار: ${examText(m.exam)}`].join("\n");
   });
@@ -451,7 +502,12 @@ function dailyForm(studentId, rec = null, preset = {}) {
   const kind = rec ? rec.kind || "regular" : preset.kind || (owed.length && dowOf(date) === makeupDay() ? "makeup" : "regular");
   const firstOwed = owed.find((x) => pagesOf(x));
   const [nf, nt] = kind === "makeup" && firstOwed && !rec ? [firstOwed.fromPage, firstOwed.toPage] : nextPages(st);
-  const r = rec || { fromPage: nf, toPage: nt, status: "done", mistakes: [], teacherId: teacherAt(st, date) };
+  const r = rec || { fromPage: nf, toPage: nt, status: "done", mistakes: [], teacherId: teacherAt(st, date),
+    newPages: kind === "makeup" && firstOwed && firstOwed.newPages != null ? firstOwed.newPages : dailyPagesOf(st),
+    ...(kind === "makeup" && firstOwed && firstOwed.reachSurah ? { reachSurah: firstOwed.reachSurah, reachAyah: firstOwed.reachAyah } : {}) };
+  // الموضع المقترح: نهاية الورد (أو بدايته لمن يحفظ من آخر المصحف)
+  const reach0 = r.reachSurah ? { surah: r.reachSurah, ayah: r.reachAyah }
+    : r.toPage ? (([s, a]) => ({ surah: s, ayah: a }))(st.direction === "desc" ? pageStartAyah(r.fromPage) : pageEndAyah(r.toPage)) : null;
   const checked = (x) => (rec ? (rec.makeupFor || []).includes(x.id) : x === owed[0]);
 
   const form = openDialog(`
@@ -470,9 +526,19 @@ function dailyForm(studentId, rec = null, preset = {}) {
     </div>
     <p class="field-label">النتيجة</p>
     ${chips("status", Object.entries(DAILY_STATUS).filter(([k]) => !isStudent() || k !== "absent").map(([k, v]) => [k, `${STATUS_ICON[k]} ${v}`]), r.status)}
-    <div class="grid2 pages-box" style="margin-top:12px">
-      <label><span>من صفحة</span><input name="fromPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.fromPage || ""}"></label>
-      <label><span>إلى صفحة</span><input name="toPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.toPage || ""}"></label>
+    <div class="work-box">
+      <div class="grid2" style="margin-top:12px">
+        <label><span>الحفظ الجديد (أوجه)</span><input name="newPages" type="number" min="0" step="0.5" inputmode="decimal" value="${r.newPages != null ? r.newPages : pagesOf(r) || ""}"></label>
+        <label><span>المراجعة (أوجه)</span><input name="reviewPages" type="number" min="0" step="0.5" inputmode="decimal" placeholder="0" value="${r.reviewPages || ""}"></label>
+      </div>
+      ${reachPicker("reach", reach0, "وصل في الحفظ إلى")}
+      <p class="small muted" data-pages-hint></p>
+      <details class="more"><summary>تعديل الصفحات</summary>
+        <div class="grid2">
+          <label><span>من صفحة</span><input name="fromPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.fromPage || ""}"></label>
+          <label><span>إلى صفحة</span><input name="toPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.toPage || ""}"></label>
+        </div>
+      </details>
     </div>
     <div class="mistakes-box">
       <div class="row between"><p class="field-label" style="margin:0">الآيات التي وقع فيها الخطأ</p>
@@ -487,9 +553,12 @@ function dailyForm(studentId, rec = null, preset = {}) {
       <button class="btn whatsapp" data-send-after>حفظ وإرسال 📤</button>
     </div>`, (fd, f, submitter) => {
     const status = fd.get("status"), k = fd.get("kind");
-    const fromPage = Number(fd.get("fromPage")) || 0, toPage = Number(fd.get("toPage")) || 0;
+    const newPages = Math.max(0, Number(fd.get("newPages")) || 0), reviewPages = Math.max(0, Number(fd.get("reviewPages")) || 0);
+    let fromPage = Number(fd.get("fromPage")) || 0, toPage = Number(fd.get("toPage")) || 0;
     const inRange = (p) => p >= 1 && p <= TOTAL_PAGES;
-    if (status !== "absent" && (!inRange(fromPage) || !inRange(toPage))) { toast(`أدخل الصفحات من 1 إلى ${TOTAL_PAGES}`); return false; }
+    if (status !== "absent" && !newPages && !reviewPages) { toast("اكتب مقدار الحفظ الجديد أو المراجعة"); return false; }
+    if (status !== "absent" && newPages && (!inRange(fromPage) || !inRange(toPage))) { toast(`تحقق من الصفحات (1–${TOTAL_PAGES})`); return false; }
+    if (!newPages) fromPage = toPage = 0;
     const ms = [];
     const surahs = fd.getAll("mSurah"), ayahs = fd.getAll("mAyah"), notes = fd.getAll("mNote");
     for (let i = 0; i < surahs.length; i++) {
@@ -500,7 +569,9 @@ function dailyForm(studentId, rec = null, preset = {}) {
     }
     const data = {
       date: fd.get("date") || date, kind: k, status, teacherId: fd.get("teacherId"),
-      fromPage: status === "absent" && !fromPage ? 0 : fromPage, toPage: status === "absent" && !toPage ? 0 : toPage,
+      fromPage: status === "absent" ? 0 : fromPage, toPage: status === "absent" ? 0 : toPage,
+      newPages: status === "absent" ? 0 : newPages, reviewPages: status === "absent" ? 0 : reviewPages,
+      reachSurah: status === "absent" ? 0 : Number(fd.get("reachSurah")) || 0, reachAyah: status === "absent" ? 0 : Number(fd.get("reachAyah")) || 0,
       mistakes: status === "absent" ? [] : ms, notes: fd.get("notes").trim(), updatedAt: Date.now()
     };
     let target = rec;
@@ -524,7 +595,7 @@ function dailyForm(studentId, rec = null, preset = {}) {
     if (e.target.closest("[data-add-m]")) {
       const rows = $(".mrows", form);
       const prev = $$("[name=mSurah]", rows).pop();
-      const surah = prev ? Number(prev.value) : surahAtPage(Number($("[name=fromPage]", form).value)) || 1;
+      const surah = prev ? Number(prev.value) : Number($("[name=reachSurah]", form).value) || 1;
       rows.insertAdjacentHTML("beforeend", mistakeRow({ surah }));
       $$("[name=mAyah]", rows).pop().focus();
       syncStatus();
@@ -547,16 +618,40 @@ function dailyForm(studentId, rec = null, preset = {}) {
   const syncBoxes = () => {
     const status = $("[name=status]:checked", form).value;
     $(".mistakes-box", form).hidden = status === "absent";
+    $(".work-box", form).hidden = status === "absent";
     $(".makeup-box", form).hidden = $("[name=kind]:checked", form).value !== "makeup";
   };
+  // الصفحات تُحسب من الموضع ومقدار الحفظ الجديد، ما لم يعدّلها الشيخ بنفسه
+  let pagesTouched = !!(rec && rec.fromPage && rec.newPages == null);
+  const v = (n) => $(`[name=${n}]`, form);
+  const syncPages = () => {
+    const n = Math.ceil(Number(v("newPages").value) || 0), s = Number(v("reachSurah").value), a = Number(v("reachAyah").value);
+    if (!pagesTouched && n && s && a) {
+      const p = ayahPage(s, a);
+      const [f, t] = st.direction === "desc" ? [p, Math.min(TOTAL_PAGES, p + n - 1)] : [Math.max(1, p - n + 1), p];
+      v("fromPage").value = f; v("toPage").value = t;
+    }
+    const f = Number(v("fromPage").value), t = Number(v("toPage").value);
+    $("[data-pages-hint]", form).textContent = n && f && t ? `الحفظ الجديد ${f === t ? `صفحة ${f}` : `من صفحة ${f} إلى صفحة ${t}`}` : "";
+  };
   form.onchange = (e) => {
+    syncAyahSelect(e, form);
     if (e.target.name === "status") statusTouched = true;
+    if (e.target.name === "fromPage" || e.target.name === "toPage") pagesTouched = true;
     if (e.target.name === "kind" && e.target.value === "makeup" && !rec) {
       const o = owed.find((x) => pagesOf(x));
-      if (o) { $("[name=fromPage]", form).value = o.fromPage; $("[name=toPage]", form).value = o.toPage; }
+      if (o) {
+        if (o.newPages != null) v("newPages").value = o.newPages;
+        v("fromPage").value = o.fromPage; v("toPage").value = o.toPage;
+        if (o.reachSurah) { v("reachSurah").value = o.reachSurah; v("reachAyah").innerHTML = ayahOptions(o.reachSurah, o.reachAyah); }
+        else pagesTouched = true;
+      }
     }
+    syncPages();
     syncBoxes();
   };
+  form.oninput = (e) => { if (e.target.name === "newPages") syncPages(); };
+  syncPages();
   syncBoxes();
 }
 
@@ -708,10 +803,11 @@ function dailyCard(r) {
   const cls = r.status === "done" ? "ok" : r.madeUpBy ? "warn" : "danger";
   return `<div class="card">
     <div class="row between">
-      <b>${r.kind === "makeup" ? "↩️ تعويض" : DAYS[dowOf(r.date)]}${n ? ` · ${pageRangeText(r)}` : ""}</b>
+      <b>${r.kind === "makeup" ? "↩️ تعويض" : DAYS[dowOf(r.date)]}${r.reachSurah ? ` · وصل إلى ${surahName(r.reachSurah)} ${r.reachAyah}` : n ? ` · ${pageRangeText(r)}` : ""}</b>
       <span class="badge ${cls}">${STATUS_ICON[r.status]} ${DAILY_STATUS[r.status]}${r.madeUpBy ? " · عوّض" : isOwed(r) ? " · يلزمه التعويض" : ""}</span>
     </div>
-    <div class="muted small">${fmtDate(r.date)}${n ? ` · ${wajhAr(n)}` : ""}${getTeacher(r.teacherId) ? ` · ${esc(getTeacher(r.teacherId).name)}` : ""}${r.sentAt ? ` · <span class="badge ok">أُرسل ✓</span>` : ""}</div>
+    ${r.status !== "absent" && (r.newPages != null || r.reviewPages) ? `<div class="small">📖 حفظ جديد: ${wajhAr(Number(r.newPages) || 0)}${Number(r.reviewPages) ? ` · 🔁 مراجعة: ${wajhAr(Number(r.reviewPages))}` : ""}${n ? ` <span class="muted">(${pageRangeText(r)})</span>` : ""}</div>` : ""}
+    <div class="muted small">${fmtDate(r.date)}${n && r.newPages == null ? ` · ${wajhAr(n)}` : ""}${getTeacher(r.teacherId) ? ` · ${esc(getTeacher(r.teacherId).name)}` : ""}${r.sentAt ? ` · <span class="badge ok">أُرسل ✓</span>` : ""}</div>
     ${r.bySelf ? `<div style="margin-top:4px">${selfBadge(r)}</div>` : ""}
     ${ms.length ? `<div class="small" style="margin-top:6px">📌 ${ms.map((m) => `<span class="badge warn">${surahName(m.surah)} ${m.ayah}${m.note ? `: ${esc(m.note)}` : ""}</span>`).join(" ")}</div>` : ""}
     ${r.notes ? `<div class="small" style="margin-top:4px">📝 ${esc(r.notes)}</div>` : ""}
@@ -735,7 +831,7 @@ function studentProgramTab(st) {
       <div class="row between"><b>التقدم نحو الختم</b><span class="badge">${wajhAr(m.memorized)} من ${TOTAL_PAGES}</span></div>
       ${progressBar(m.memorized / TOTAL_PAGES, `محفوظ ${pct(m.memorized / TOTAL_PAGES)}`)}
       <div class="small" style="margin-top:6px">${khatmText(m.khatm)}</div>
-      <div class="small">📍 وصل إلى: ${reachedText(m.reached)}</div>
+      <div class="small">📍 وصل إلى: ${m.reachLabel}</div>
       <div class="small muted">المقدار اليومي: ${wajhAr(dailyPagesOf(st))} · ${st.direction === "desc" ? "من آخر المصحف" : "من أول المصحف"}</div>
       <div class="stats two" style="margin:12px 0 0">
         <div class="stat"><b>${m.exam ? m.exam.score : "—"}</b><span>اختبار ${fmtMonth(ym).replace(/\s*[\d٠-٩]+.*$/, "")}</span></div>
@@ -844,22 +940,22 @@ function pageStats(ymArg, tidArg) {
         <button class="btn sm" data-print>🖨️ طباعة / PDF</button>
       </div></div>
     ${rows.length ? `<div class="card tablewrap"><table class="report">
-      <thead><tr><th>الطالب</th><th>وصل إلى</th><th>حفظ · سرد</th><th>الحضور</th><th>الاختبار</th></tr></thead>
+      <thead><tr><th>الطالب</th><th>وصل إلى</th><th>الأوجه</th><th>الحضور</th><th>الاختبار</th></tr></thead>
       <tbody>${rows.map(({ st, m }) => `<tr>
         <td><a href="#/student/${st.id}">${esc(st.name)}</a></td>
-        <td>${m.reached ? `ص ${m.reached}<br><span class="small muted">${surahName(PAGE_SURAH[m.reached - 1])}</span>` : "—"}</td>
-        <td>${m.pages} · ${m.sardPages}</td>
+        <td>${m.reach ? `${surahName(m.reach.surah)} ${m.reach.ayah}<br><span class="small muted">ص ${ayahPage(m.reach.surah, m.reach.ayah)}</span>` : "—"}</td>
+        <td><span class="small">حفظ</span> ${m.pages}<br><span class="small">مراجعة</span> ${m.reviewPages}<br><span class="small">سرد</span> ${m.sardPages}</td>
         <td>${m.attended}/${m.required}${m.absent ? `<br><span class="small" style="color:var(--danger)">غاب ${m.absent}</span>` : ""}</td>
         <td>${m.exam ? `<b>${m.exam.score}</b><br><span class="small muted">${examGrade(m.exam)}</span>` : `<span class="muted">—</span>`}</td>
       </tr>`).join("")}</tbody></table>
-      <p class="small muted" style="margin:6px 0 0">«حفظ · سرد»: الأوجه المحفوظة هذا الشهر ثم أوجه السرد. الحضور: أيام الحضور من أيام التسميع${HIJRI ? "، والشهر هجري بتقويم أم القرى" : ""}.</p></div>` : ""}
+      <p class="small muted" style="margin:6px 0 0">الأوجه: ما حُفظ وما رُوجع وما سُرد هذا الشهر. الحضور: أيام الحضور من أيام التسميع${HIJRI ? "، والشهر هجري بتقويم أم القرى" : ""}.</p></div>` : ""}
     <h2>تفاصيل الطلاب</h2>
     ${rows.length ? rows.map(({ st, m }) => `<div class="card">
       <div class="row between"><a href="#/student/${st.id}"><b>${esc(st.name)}</b></a>
         <span class="badge ${m.rate == null ? "" : m.rate >= 0.9 ? "ok" : m.rate >= 0.7 ? "warn" : "danger"}">إنجاز ${pct(m.rate)}</span></div>
       <div class="small muted">أنجز ${m.done} · عوّض ${m.madeUp} · أخطأ ${m.failed} · غاب ${m.absent}${m.unrecorded ? ` · لم يُسجَّل ${m.unrecorded}` : ""} — من ${m.required} يوماً${m.owed ? ` · <span class="badge danger">لم يعوّض ${m.owed}</span>` : ""}</div>
-      <div class="small">📍 وصل إلى: ${reachedText(m.reached)} · 📝 الاختبار: ${examText(m.exam)}</div>
-      <div class="small">حفظ الشهر: <b>${wajhAr(m.pages)}</b> · السرد: <b>${wajhAr(m.sardPages)}</b> · الأخطاء: ${m.mistakes}</div>
+      <div class="small">📍 وصل إلى: ${m.reachLabel} · 📝 الاختبار: ${examText(m.exam)}</div>
+      <div class="small">حفظ الشهر: <b>${wajhAr(m.pages)}</b> · المراجعة: <b>${wajhAr(m.reviewPages)}</b> · السرد: <b>${wajhAr(m.sardPages)}</b> · الأخطاء: ${m.mistakes}</div>
       ${progressBar(m.memorized / TOTAL_PAGES, `محفوظ ${pct(m.memorized / TOTAL_PAGES)}`)}
       <div class="small muted">المحفوظ ${m.memorized}/${TOTAL_PAGES} (${pct(m.memorized / TOTAL_PAGES)}) · ${m.khatm.finished ? "🎉 خاتم" : `الختم المتوقع: ${fmtKhatm(m.khatm.date)}`}</div>
       <div class="row" style="margin-top:8px">
@@ -1068,17 +1164,25 @@ function studentProgramFields(st) {
     <div class="grid2">
       <label><span>المعلم</span><select name="teacherId">${teacherOptions(st.teacherId)}</select></label>
       <label><span>المقدار اليومي (أوجه)</span><input name="dailyPages" type="number" min="1" inputmode="numeric" value="${esc(st.dailyPages || db.settings.dailyPages || 1)}"></label>
-      <label style="grid-column:1/-1"><span>كم وجهاً كان يحفظ قبل البرنامج</span><input name="memorizedBefore" type="number" min="0" max="${TOTAL_PAGES}" inputmode="numeric" value="${esc(st.memorizedBefore || 0)}"></label>
-    </div>`;
+    </div>
+    ${reachPicker("before", st.reachedBefore && st.reachedBefore.surah ? st.reachedBefore
+      : st.memorizedBefore ? (([s, a]) => ({ surah: s, ayah: a }))(st.direction === "desc" ? pageStartAyah(TOTAL_PAGES - st.memorizedBefore + 1) : pageEndAyah(st.memorizedBefore)) : null,
+      "وصل في الحفظ إلى (قبل البرنامج)", true)}`;
 }
 function studentDirectionField(st) {
   return `<label><span>اتجاه الحفظ</span><select name="direction">
     <option value="asc" ${st.direction !== "desc" ? "selected" : ""}>من الفاتحة إلى الناس</option>
     <option value="desc" ${st.direction === "desc" ? "selected" : ""}>من الناس إلى الفاتحة</option></select></label>`;
 }
+// المحفوظ قبل البرنامج من السورة والآية التي وصل إليها
+function beforeFromForm(fd) {
+  const s = Number(fd.get("beforeSurah")) || 0, a = Number(fd.get("beforeAyah")) || 1;
+  if (!s) return { reachedBefore: null, memorizedBefore: 0 };
+  const p = ayahPage(s, a);
+  return { reachedBefore: { surah: s, ayah: a }, memorizedBefore: fd.get("direction") === "desc" ? TOTAL_PAGES - p + 1 : p };
+}
 function readStudentProgramFields(fd) {
   return {
-    dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1),
-    memorizedBefore: Math.min(TOTAL_PAGES, Math.max(0, Number(fd.get("memorizedBefore")) || 0)), direction: fd.get("direction")
+    dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1), direction: fd.get("direction"), ...beforeFromForm(fd)
   };
 }

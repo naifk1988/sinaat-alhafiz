@@ -301,7 +301,7 @@ const dlgActions = (label = "حفظ") =>
 
 function studentForm(st = {}) {
   const days = st.days || (st.id ? [] : programDays());
-  openDialog(`
+  const form = openDialog(`
     <h2>${st.id ? "تعديل بيانات الطالب" : "إضافة طالب"}</h2>
     <label><span>اسم الطالب</span><input name="name" required value="${esc(st.name)}"></label>
     <label><span>جوال الطالب (للواتساب)</span><input name="phone" type="tel" inputmode="tel" placeholder="05xxxxxxxx" value="${esc(st.phone)}"></label>
@@ -335,6 +335,7 @@ function studentForm(st = {}) {
     save(); render(); toast("تم الحفظ");
     if (invite) setTimeout(() => inviteDialog(invite));
   });
+  form.onchange = (e) => syncAyahSelect(e, form);
 }
 
 // خيارات بشكل أزرار (بدل القوائم) لتسريع الإدخال

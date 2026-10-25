@@ -497,3 +497,4 @@ body.student-mode, body.login-mode { padding-bottom: 24px; }
 .login { max-width: 420px; margin: 40px auto; text-align: center; }
 .stats.two { grid-template-columns: repeat(2, 1fr); }
 .more { margin: 4px 0 10px; } .more summary { cursor: pointer; color: var(--primary); padding: 6px 0; } .more[open] summary { margin-bottom: 8px; }
+.reach { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
