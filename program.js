@@ -915,9 +915,8 @@ function programSettingsHtml() {
     ${list.map((t) => `<div class="grid2"><input type="hidden" name="tId" value="${esc(t.id || "")}">
       <input name="tName" placeholder="اسم المعلم" aria-label="اسم المعلم" value="${esc(t.name || "")}">
       <input name="tPhone" type="tel" inputmode="tel" placeholder="جوال المعلم" aria-label="جوال المعلم" value="${esc(t.phone || "")}">
-      ${isAdmin() ? `<div class="row" style="grid-column:1/-1;margin-bottom:8px"><input name="tCode" placeholder="رمز دخول المعلم" aria-label="رمز دخول المعلم" value="${esc(t.code || "")}" class="grow" style="width:auto">
-        ${t.code ? `<button type="button" class="btn sm whatsapp" data-send-teacher-code="${t.id}">📤</button>` : ""}</div>` : ""}</div>`).join("")}
-    ${isAdmin() ? `<p class="small muted">رمز دخول المعلم: يكتبه المشرف (6 أحرف أو أرقام على الأقل) ثم يحفظ ويرسله للمعلم.</p>` : ""}
+      ${isAdmin() && t.code ? `<div style="grid-column:1/-1;margin-bottom:8px"><button type="button" class="btn sm whatsapp" data-send-teacher-code="${t.id}">📤 إرسال رابط الدخول لـ ${esc(t.name)}</button></div>` : ""}</div>`).join("")}
+    ${isAdmin() ? `<p class="small muted">اكتب اسم المعلم وجواله ثم «حفظ الإعدادات»، فيظهر زر إرسال رابط دخوله.</p>` : ""}
     <p class="small muted">لإضافة معلم آخر احفظ ثم ستظهر خانة جديدة. ولحذف معلم امسح اسمه.</p>
     <div class="grid2">
       <label><span>اسم المشرف</span><input name="supervisorName" value="${esc(s.supervisorName || "")}"></label>
@@ -927,11 +926,11 @@ function programSettingsHtml() {
 }
 function readProgramSettings(fd) {
   const ids = fd.getAll("tId"), names = fd.getAll("tName"), phones = fd.getAll("tPhone");
-  const codes = fd.getAll("tCode");
+  // رمز دخول المعلم يُنشأ تلقائياً (المشرف وحده يملك رموز المعلمين)
   const list = names.map((n, i) => {
     const id = ids[i] || uid();
-    const code = codes.length ? codes[i].trim() : (getTeacher(id) || {}).code || "";
-    return { id, name: n.trim(), phone: phones[i].trim(), code: code.length >= 6 ? code : "" };
+    const code = (getTeacher(id) || {}).code || (isAdmin() && n.trim() ? newCode() : "");
+    return { id, name: n.trim(), phone: phones[i].trim(), code };
   }).filter((t) => t.name);
   const days = fd.getAll("programDays").map(Number);
   return {
@@ -948,11 +947,13 @@ function studentProgramFields(st) {
     <div class="grid2">
       <label><span>المعلم</span><select name="teacherId">${teacherOptions(st.teacherId)}</select></label>
       <label><span>المقدار اليومي (أوجه)</span><input name="dailyPages" type="number" min="1" inputmode="numeric" value="${esc(st.dailyPages || db.settings.dailyPages || 1)}"></label>
-      <label><span>المحفوظ قبل البرنامج (أوجه)</span><input name="memorizedBefore" type="number" min="0" max="${TOTAL_PAGES}" inputmode="numeric" value="${esc(st.memorizedBefore || 0)}"></label>
-      <label><span>اتجاه الحفظ</span><select name="direction">
-        <option value="asc" ${st.direction !== "desc" ? "selected" : ""}>من الفاتحة إلى الناس</option>
-        <option value="desc" ${st.direction === "desc" ? "selected" : ""}>من الناس إلى الفاتحة</option></select></label>
+      <label style="grid-column:1/-1"><span>كم وجهاً كان يحفظ قبل البرنامج</span><input name="memorizedBefore" type="number" min="0" max="${TOTAL_PAGES}" inputmode="numeric" value="${esc(st.memorizedBefore || 0)}"></label>
     </div>`;
+}
+function studentDirectionField(st) {
+  return `<label><span>اتجاه الحفظ</span><select name="direction">
+    <option value="asc" ${st.direction !== "desc" ? "selected" : ""}>من الفاتحة إلى الناس</option>
+    <option value="desc" ${st.direction === "desc" ? "selected" : ""}>من الناس إلى الفاتحة</option></select></label>`;
 }
 function readStudentProgramFields(fd) {
   return {

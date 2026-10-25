@@ -17,6 +17,7 @@ let syncState = "", lastSync = 0;
 
 const isStudent = () => !!(auth && auth.role === "student");
 const isAdmin = () => !!(auth && auth.role === "admin");
+const cloudActive = () => !!(auth && !isStudent());
 const loginRequired = () => cloud.configured && cloud.hasAdmin && !auth;
 
 async function syncApi(body) {
@@ -177,6 +178,8 @@ async function login(code) {
     const res = await syncApi({ code, push });
     auth = { code, ...res.me };
     writeJSON(AUTH_KEY, auth);
+    cloud = { configured: true, hasAdmin: true };
+    writeJSON(CLOUD_KEY, cloud);
     applyServer(res, sent);
     lastSync = Date.now();
     setSyncState("ok");
@@ -185,6 +188,7 @@ async function login(code) {
     render();
   } catch (e) {
     auth = null;
+    render();
     toast(e.status === 401 ? "الرمز غير صحيح" : e.status === 429 ? "محاولات كثيرة، حاول بعد ربع ساعة" : "تعذّر الاتصال، تأكد من الإنترنت");
   }
 }
@@ -238,7 +242,8 @@ function setupAdminDialog() {
   });
 }
 
-function pageLogin() {
+function pageLogin(busy) {
+  if (busy) return `<div class="card login"><h1>${esc(programName())}</h1><p class="muted">جارٍ الدخول…</p></div>`;
   return `
     <div class="card login">
       <h1>${esc(programName())}</h1>
@@ -256,8 +261,25 @@ const newCode = () => {
   do c = String(100000 + Math.floor(Math.random() * 900000)); while (used.has(c));
   return c;
 };
-function codeMessage(name, code) {
-  return `السلام عليكم ورحمة الله وبركاته\n${name} حفظه الله\nللدخول إلى ${programName()} وتسجيل تسميعك اليومي:\n1️⃣ افتح الرابط: ${location.origin}${location.pathname}\n2️⃣ اكتب رمز الدخول: ${code}\nاحفظ الرمز ولا تعطه لأحد.`;
+const loginLink = (code) => `${location.origin}${location.pathname}#/login/${encodeURIComponent(code)}`;
+function codeMessage(name, code, purpose = "وتسجيل تسميعك اليومي") {
+  return `السلام عليكم ورحمة الله وبركاته\n${name} حفظه الله\nللدخول إلى ${programName()} ${purpose}، اضغط هذا الرابط:\n${loginLink(code)}\n\nاحتفظ بهذه الرسالة، وكلما أردت التسجيل اضغط الرابط.\nهذا الرابط خاص بك فلا ترسله لأحد.`;
+}
+// إرسال رابط دخول الطالب (يُنشأ رمزه إن لم يوجد)
+function inviteDialog(id) {
+  const st = getStudent(id);
+  if (!st) return;
+  if (!st.loginCode) { st.loginCode = newCode(); save(); }
+  multiSendDialog({ title: `رابط دخول ${esc(st.name)}`, text: codeMessage(st.name, st.loginCode),
+    recipients: [st.phone && { label: "الطالب", phone: st.phone }, st.guardianPhone && { label: "ولي الأمر", phone: st.guardianPhone }].filter(Boolean) });
+}
+// الدخول بالضغط على الرابط المرسل
+function linkLogin(code) {
+  confirmDialog("هذا رابط دخول لحساب آخر. هل تريد الخروج من حسابك الحالي على هذا الجهاز والدخول به؟", () => {
+    auth = null; snap = null; writeJSON(AUTH_KEY, null); writeJSON(SNAP_KEY, null);
+    db = emptyDb();
+    login(code);
+  }, "دخول");
 }
 
 // قسم المزامنة في الإعدادات
@@ -279,12 +301,12 @@ function syncSettingsHtml() {
       <p class="small muted">آخر مزامنة: ${lastSync ? new Date(lastSync).toLocaleTimeString("ar") : "—"}</p>
       <div class="row"><button class="btn sm" data-action="sync-now">🔄 مزامنة الآن</button><button class="btn sm danger" data-action="logout">تسجيل الخروج</button></div>
     </div>
-    <h2>رموز دخول الطلاب</h2><div class="card">
-      <p class="small muted">يدخل كل طالب برمزه فيرى سجله وحده ويسجّل تسميعه اليومي. أنشئ الرمز ثم أرسله له.</p>
+    <h2>روابط دخول الطلاب</h2><div class="card">
+      <p class="small muted">يضغط الطالب على رابطه فيدخل مباشرة، ويرى سجله وحده ويسجّل تسميعه اليومي.</p>
       ${sts.length ? `<ul class="list">${sts.map((st) => `<li class="row between">
-        <span class="grow"><b>${esc(st.name)}</b><br><span class="small muted">${st.loginCode ? `الرمز: <b dir="ltr">${esc(st.loginCode)}</b>` : "لا يوجد رمز"}</span></span>
-        ${st.loginCode ? `<button class="btn sm whatsapp" data-send-code="${st.id}">📤 إرسال</button>` : ""}
-        <button class="btn sm" data-gen-code="${st.id}">${st.loginCode ? "تغيير" : "إنشاء رمز"}</button></li>`).join("")}</ul>` : `<p class="empty">أضف طلاباً أولاً</p>`}
+        <span class="grow"><b>${esc(st.name)}</b></span>
+        <button class="btn sm whatsapp" data-send-code="${st.id}">📤 رابط الدخول</button>
+        ${st.loginCode ? `<button class="btn sm" data-gen-code="${st.id}" title="يُبطل الرابط القديم">رابط جديد</button>` : ""}</li>`).join("")}</ul>` : `<p class="empty">أضف طلاباً أولاً</p>`}
     </div>`;
 }
 
@@ -292,20 +314,15 @@ function syncClick(t) {
   const d = t.dataset;
   if (d.genCode) {
     const st = getStudent(d.genCode);
-    const go = () => { st.loginCode = newCode(); save(); render(); toast("تم إنشاء الرمز"); };
-    if (st.loginCode) confirmDialog(`تغيير رمز ${st.name}؟ الرمز القديم لن يعمل بعدها.`, go, "تغيير");
+    const go = () => { st.loginCode = newCode(); save(); render(); setTimeout(() => inviteDialog(st.id)); };
+    if (st.loginCode) confirmDialog(`إنشاء رابط دخول جديد لـ ${st.name}؟ الرابط القديم لن يعمل بعدها.`, go, "رابط جديد");
     else go();
     return true;
   }
-  if (d.sendCode) {
-    const st = getStudent(d.sendCode);
-    multiSendDialog({ title: `رمز الدخول — ${esc(st.name)}`, text: codeMessage(st.name, st.loginCode),
-      recipients: recipientsFor(st).filter((r) => r.phone === st.phone || r.phone === st.guardianPhone) });
-    return true;
-  }
+  if (d.sendCode || d.invite) { inviteDialog(d.sendCode || d.invite); return true; }
   if (d.sendTeacherCode) {
     const tc = getTeacher(d.sendTeacherCode);
-    multiSendDialog({ title: `رمز الدخول — ${esc(tc.name)}`, text: codeMessage(tc.name, tc.code).replace("وتسجيل تسميعك اليومي", "ومتابعة طلابك"),
+    multiSendDialog({ title: `رمز الدخول — ${esc(tc.name)}`, text: codeMessage(tc.name, tc.code, "ومتابعة طلابك"),
       recipients: tc.phone ? [{ label: tc.name, phone: tc.phone }] : [] });
     return true;
   }

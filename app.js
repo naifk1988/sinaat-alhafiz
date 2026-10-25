@@ -304,28 +304,36 @@ function studentForm(st = {}) {
   openDialog(`
     <h2>${st.id ? "تعديل بيانات الطالب" : "إضافة طالب"}</h2>
     <label><span>اسم الطالب</span><input name="name" required value="${esc(st.name)}"></label>
-    <div class="grid2">
-      <label><span>جوال الطالب</span><input name="phone" type="tel" inputmode="tel" placeholder="05xxxxxxxx" value="${esc(st.phone)}"></label>
-      <label><span>جوال ولي الأمر</span><input name="guardianPhone" type="tel" inputmode="tel" value="${esc(st.guardianPhone)}"></label>
-    </div>
-    <label><span>أيام الحلقة</span>
-      <div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" name="days" value="${i}" ${days.includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div>
-    </label>
-    <div class="grid2">
-      <label><span>الرواية التي يقرأ بها</span><select name="riwaya">${riwayaOptions(riwayaOf(st))}</select></label>
-      <label><span>وقت الحلقة</span><input name="time" type="time" value="${esc(st.time || "16:00")}"></label>
-    </div>
+    <label><span>جوال الطالب (للواتساب)</span><input name="phone" type="tel" inputmode="tel" placeholder="05xxxxxxxx" value="${esc(st.phone)}"></label>
     ${studentProgramFields(st)}
-    <label><span>ملاحظات عامة (المستوى، مقدار الحفظ الحالي…)</span><textarea name="notes">${esc(st.notes)}</textarea></label>
-    ${dlgActions()}`, (fd) => {
+    <details class="more"><summary>خيارات إضافية</summary>
+      <label><span>جوال ولي الأمر</span><input name="guardianPhone" type="tel" inputmode="tel" value="${esc(st.guardianPhone)}"></label>
+      <label><span>أيام الحلقة</span>
+        <div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" name="days" value="${i}" ${days.includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div>
+      </label>
+      <div class="grid2">
+        <label><span>الرواية التي يقرأ بها</span><select name="riwaya">${riwayaOptions(riwayaOf(st))}</select></label>
+        <label><span>وقت الحلقة</span><input name="time" type="time" value="${esc(st.time || "16:00")}"></label>
+      </div>
+      ${studentDirectionField(st)}
+      <label><span>ملاحظات عامة</span><textarea name="notes">${esc(st.notes)}</textarea></label>
+    </details>
+    ${dlgActions(st.id ? "حفظ" : cloudActive() ? "حفظ وإرسال رابط الدخول 📤" : "حفظ")}`, (fd) => {
     const data = {
       name: fd.get("name").trim(), phone: fd.get("phone").trim(), guardianPhone: fd.get("guardianPhone").trim(),
       days: fd.getAll("days").map(Number), time: fd.get("time"), riwaya: fd.get("riwaya"), notes: fd.get("notes").trim(),
       ...readStudentProgramFields(fd), updatedAt: Date.now()
     };
+    let invite = null;
     if (st.id) Object.assign(st, data);
-    else { const n = { id: uid(), createdAt: Date.now(), ...data }; db.students.push(n); location.hash = `#/student/${n.id}`; }
+    else {
+      const n = { id: uid(), createdAt: Date.now(), ...data };
+      // مع المزامنة: يُنشأ رمز الطالب تلقائياً ويُرسل له رابط دخول مباشر
+      if (cloudActive()) { n.loginCode = newCode(); invite = n.id; }
+      db.students.push(n); location.hash = `#/student/${n.id}`;
+    }
     save(); render(); toast("تم الحفظ");
+    if (invite) setTimeout(() => inviteDialog(invite));
   });
 }
 
@@ -734,6 +742,7 @@ function pageStudent(id, tab) {
       <p><b>أيام الحلقة:</b> ${(st.days || []).map((d) => DAYS[d]).join("، ") || "—"} ${st.time ? "— " + fmtTime(st.time) : ""}</p>
       <p><b>آخر تذكير:</b> ${st.lastReminder ? new Date(st.lastReminder).toLocaleString("ar") : "—"}</p>
       ${st.notes ? `<p><b>ملاحظات:</b> ${esc(st.notes)}</p>` : ""}
+      ${cloudActive() ? `<div class="row" style="margin-bottom:10px"><button class="btn whatsapp" data-invite="${st.id}">📤 إرسال رابط الدخول للطالب</button></div>` : ""}
       <div class="row"><button class="btn" data-action="edit-student">تعديل البيانات</button><button class="btn danger" data-action="delete-student">حذف الطالب</button></div>
     </div>`;
   }
@@ -1524,6 +1533,14 @@ function parseRoute() {
 function render() {
   document.body.classList.toggle("login-mode", loginRequired());
   document.body.classList.toggle("student-mode", isStudent());
+  // الدخول بالضغط على رابط الدخول المرسل بواتساب
+  const link = location.hash.match(/^#\/login\/([^/]+)/);
+  if (link) {
+    history.replaceState(null, "", "#/");
+    const code = decodeURIComponent(link[1]);
+    if (!auth) { document.body.classList.add("login-mode"); view.innerHTML = pageLogin(true); login(code); return; }
+    if (auth.code !== code) setTimeout(() => linkLogin(code));
+  }
   if (loginRequired()) { view.innerHTML = pageLogin(); return; }
   // الطالب يرى صفحته وحدها
   if (isStudent() && !location.hash.startsWith(`#/student/${auth.studentId}`)) {
