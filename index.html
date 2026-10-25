@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <title>صناعة الحافظ</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/" class="brand"><img src="icon.svg" alt="" width="28" height="28"><span id="brand-name">صناعة الحافظ</span></a>
+    <span id="sync-state" hidden></span>
+  </header>
+
+  <main id="view" class="container"></main>
+
+  <nav class="tabbar">
+    <a href="#/" data-nav="home"><span class="ic">🏠</span>الرئيسية</a>
+    <a href="#/students" data-nav="students"><span class="ic">👥</span>الطلاب</a>
+    <a href="#/mushaf" data-nav="mushaf"><span class="ic">📖</span>المصحف</a>
+    <a href="#/mistakes" data-nav="mistakes"><span class="ic">📌</span>الأخطاء</a>
+    <a href="#/stats" data-nav="stats"><span class="ic">📊</span>الإحصائيات</a>
+    <a href="#/settings" data-nav="settings"><span class="ic">⚙️</span>الإعدادات</a>
+  </nav>
+
+  <dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="data.js"></script>
+  <script src="program.js"></script>
+  <script src="sync.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
