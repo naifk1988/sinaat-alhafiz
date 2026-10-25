@@ -842,7 +842,7 @@ function pageSettings() {
     <form id="settings-form" class="card">
       ${programSettingsHtml()}
       <label><span>اسم الحلقة</span><input name="halaqaName" value="${esc(s.halaqaName)}"></label>
-      <label><span>اسم المعلم</span><input name="teacherName" value="${esc(s.teacherName)}"></label>
+      ${teachers().length ? `<input type="hidden" name="teacherName" value="${esc(s.teacherName)}">` : `<label><span>اسم المعلم</span><input name="teacherName" value="${esc(s.teacherName)}"></label>`}
       <div class="grid2">
         <label><span>مفتاح الدولة للجوال</span><input name="countryCode" inputmode="numeric" value="${esc(s.countryCode)}"></label>
         <label><span>يُعدّ الخطأ متكرراً بعد</span><select name="repeatThreshold">${[2, 3, 4].map((n) => `<option value="${n}" ${n === s.repeatThreshold ? "selected" : ""}>${n} مرات</option>`).join("")}</select></label>
