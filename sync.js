@@ -226,6 +226,7 @@ function setupAdminDialog() {
         cloud = { configured: true, hasAdmin: true };
         writeJSON(CLOUD_KEY, cloud);
         applyServer(res, sent);
+        lastSync = Date.now();
         setSyncState("ok");
         render();
         toast("تم تفعيل المزامنة");

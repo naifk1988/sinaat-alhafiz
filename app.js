@@ -846,7 +846,7 @@ function pageSettings() {
     ${syncSettingsHtml()}
     <h2>النسخ الاحتياطي</h2>
     <div class="card">
-      <p class="small muted">البيانات محفوظة في هذا الجهاز فقط. صدّر نسخة احتياطية بانتظام، ويمكنك استيرادها في جهاز آخر.</p>
+      <p class="small muted">${auth ? "البيانات محفوظة على الخادم ومتزامنة بين الأجهزة، ويمكنك مع ذلك تنزيل نسخة احتياطية للاحتفاظ بها." : "البيانات محفوظة في هذا الجهاز فقط. صدّر نسخة احتياطية بانتظام، ويمكنك استيرادها في جهاز آخر."}</p>
       <div class="row">
         <button class="btn" data-action="export">⬇️ نسخة احتياطية</button>
         <button class="btn" data-action="import">⬆️ استعادة</button>
